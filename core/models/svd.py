@@ -59,16 +59,31 @@ class SVDRecommender:
         residual = np.nan_to_num(residual, nan=0.0)
         U, sigma, Vt = svds(residual, k=self.n_factors)
 
+        # svds returns singular values ASCENDING — resort so factor 0 is the
+        # strongest. Predictions are unaffected (the reconstruction sums over
+        # all k), but ordered factors are what let us talk about "the top
+        # latent factors" in the report, and let us truncate k meaningfully.
+        order = np.argsort(-sigma)
+        U, sigma, Vt = U[:, order], sigma[order], Vt[order, :]
+
         self._user_factors = U * sigma  # fold sigma into U once, reuse forever
         self._item_factors = Vt
         return self
 
-    def score_all_items(self, user_id):
+    def score_all_items(self, user_id, clip=True):
         """
         Predicted rating for EVERY movie, for one user — returns a pandas
         Series indexed by movieId. This is the method the hybrid combiner
         (SVD + content) will call later: one vectorized lookup instead of
         looping predict() 9,724 times per user.
+
+        clip=True  -> predicted RATINGS, bounded to 0.5-5.0. Use for RMSE/MAE.
+        clip=False -> RAW scores, unbounded. Use for ranking and for the
+                      hybrid blend. Clipping is right for rating error but
+                      wrong for ordering: it pins the strongest predictions
+                      to a flat 5.0 ceiling, turning real differences into
+                      ties, and it truncates the distribution the hybrid's
+                      per-user z-score is computed over.
         """
         user_idx = np.where(self._user_ids == user_id)[0]
         if len(user_idx) == 0:
@@ -78,7 +93,8 @@ class SVDRecommender:
         # One matrix-vector multiply reconstructs this user's full predicted row.
         predicted = self._user_factors[user_idx] @ self._item_factors
         predicted = predicted + self._user_means[user_idx] + self._item_bias
-        predicted = np.clip(predicted, 0.5, 5.0)  # ratings can't go outside 0.5-5.0        
+        if clip:
+            predicted = np.clip(predicted, 0.5, 5.0)
 
         return pd.Series(predicted, index=self._movie_ids)
 
@@ -96,7 +112,7 @@ class SVDRecommender:
         NOT whatever matrix a caller passes in later. This matters during
         evaluation: it stops test-set "already seen" info from leaking in.
         """
-        scores = self.score_all_items(user_id)
+        scores = self.score_all_items(user_id, clip=False)
         if scores is None:
             return pd.Series(dtype=float)  # unknown user -> no recommendations
 
@@ -106,5 +122,3 @@ class SVDRecommender:
             scores = scores[~seen]
 
         return scores.sort_values(ascending=False).head(n)
-
-    
