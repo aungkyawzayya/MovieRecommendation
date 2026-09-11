@@ -18,7 +18,8 @@ class HybridRecommender:
     # metrics.evaluate_model() refuses a meaningless RMSE against it.
     produces_ratings = False
 
-    def __init__(self, svd_model, content_model, alpha=0.5, fallback="neutral", mode="weighted"):
+    def __init__(self, svd_model, content_model, alpha=0.5, fallback="neutral", mode="weighted",
+                 cache_components=False):
         # Composition, not inheritance — C# constructor injection. A Hybrid
         # USES an SVD model and a content model, it isn't a subtype of
         # either one (has-a, not is-a).
@@ -55,6 +56,18 @@ class HybridRecommender:
             raise ValueError('mode must be "weighted" or "switching"')
         self.mode = mode
 
+        # svd_z and content_z do NOT depend on alpha — only the blend does.
+        # An alpha sweep therefore recomputes the same two z-score vectors
+        # once per (alpha, user): 11 alphas x 598 users = 6,578 rebuilds of
+        # work that only changes 598 times. Setting cache_components=True
+        # memoizes them per user so a sweep can reuse one instance and just
+        # reassign .alpha between runs. C# analogy: a private Dictionary
+        # backing a lazily-computed property.
+        # Off by default — the cache holds 2 float64 Series per user
+        # (~95 MB for all 610 users), which is only worth paying in a sweep.
+        self._cache_components = cache_components
+        self._component_cache = {}
+
     @staticmethod
     def _zscore(scores):
         """
@@ -88,6 +101,38 @@ class HybridRecommender:
         content_z = self._zscore(content_scores[text_mask])
         return content_z.reindex(index)
 
+    def _components(self, user_id):
+        """
+        The alpha-INDEPENDENT half of the blend: (svd_z, content_z_full).
+        Split out from score_all_items() so an alpha sweep can compute it
+        once per user instead of once per (alpha, user) — see
+        cache_components in __init__.
+
+        NOTE on scope: both z-scores are computed over the FULL catalogue
+        for this user, and already-rated items are removed later, in
+        recommend_top_n(). For a single model that choice cannot change the
+        ranking (z is a monotonic transform), but in a BLEND it shifts what
+        alpha means, since each model's std comes from the same full set
+        rather than the post-exclusion candidate set. alpha is selected on
+        validation, so the tuning absorbs it — but the report's Methods
+        section should state which set the z-scores are taken over.
+        """
+        if self._cache_components and user_id in self._component_cache:
+            return self._component_cache[user_id]
+
+        svd_scores = self._svd.score_all_items(user_id, clip=False)
+        if svd_scores is None:
+            result = (None, None)   # unknown user (cold-start)
+        else:
+            result = (
+                self._zscore(svd_scores),
+                self._content_z_full(user_id, svd_scores.index),
+            )
+
+        if self._cache_components:
+            self._component_cache[user_id] = result
+        return result
+
     def score_all_items(self, user_id):
         """
         Blended score for every item SVD has an opinion on. SVD always
@@ -98,17 +143,15 @@ class HybridRecommender:
         to the 5.0 ceiling — see svd.py's docstring on why clipping would
         flatten exactly the differences z-scoring depends on.
         """
-        svd_scores = self._svd.score_all_items(user_id, clip=False)
-        if svd_scores is None:
+        svd_z, content_z_full = self._components(user_id)
+        if svd_z is None:
             return None  # unknown user (cold-start) — caller must handle this
 
-        svd_z = self._zscore(svd_scores)
-        content_z_full = self._content_z_full(user_id, svd_scores.index)
         has_content = content_z_full.notna()
 
         if self.mode == "switching":
-            has_train_ratings = svd_scores.index.isin(self._svd.supported_items)
-            blended = pd.Series(np.nan, index=svd_scores.index)
+            has_train_ratings = svd_z.index.isin(self._svd.supported_items)
+            blended = pd.Series(np.nan, index=svd_z.index)
             blended[has_train_ratings] = svd_z[has_train_ratings]
             use_content = (~has_train_ratings) & has_content
             blended[use_content] = content_z_full[use_content]
@@ -129,6 +172,22 @@ class HybridRecommender:
     def supported_items(self):
         """Either model having real evidence counts as this hybrid having evidence."""
         return np.union1d(self._svd.supported_items, self._content.supported_items)
+
+    @property
+    def rankable_items(self):
+        """
+        Items this model can actually place in a ranked list — the honest
+        denominator for a catalogue-coverage figure.
+
+        In "weighted" mode with fallback="neutral" every item gets a score
+        (a text-less item simply gets alpha*svd_z), so this is the whole
+        catalogue. In "switching" mode an item with neither train ratings
+        nor plot text gets NaN and is dropped before sorting, so quoting
+        coverage against the full catalogue would understate it.
+        """
+        if self.mode == "switching":
+            return self.supported_items
+        return self._svd.item_ids
 
     def seen_items(self, user_id):
         """Delegates to the SVD model's train-time seen mask (same grid as content's)."""

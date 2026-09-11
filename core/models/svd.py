@@ -113,6 +113,16 @@ class SVDRecommender:
             return None
         return self._movie_ids[self._item_support > 0]
 
+    @property
+    def item_ids(self):
+        """
+        Every movieId this model scores over — the full grid passed to
+        fit(), cold items included. Public because the hybrid needs the
+        catalogue size to quote coverage against, and reaching into
+        another object's _movie_ids would break encapsulation.
+        """
+        return self._movie_ids
+
     def seen_items(self, user_id):
         """
         movieIds this user rated in the matrix passed to fit() — same
