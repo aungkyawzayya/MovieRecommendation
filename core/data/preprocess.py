@@ -7,6 +7,7 @@ Similar to a C# class: private fields + public methods.
 """
 
 import pandas as pd
+import numpy as np
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -69,6 +70,58 @@ class MovieDataPreprocessor:
             index="userId", columns="movieId", values="rating"
         )
         return self
+
+    @property
+    def ratings(self):
+        """
+        Public read-only access to the raw ratings DataFrame.
+        C# analogy: public DataFrame Ratings => _ratings;
+        (auto-property with a private backing field, read-only from outside)
+        """
+        return self._ratings
+
+    def train_test_split(self, test_frac=0.2, seed=42):
+        """
+        Per-user split: holds out test_frac of EACH user's ratings (not a
+        global random split) — this guarantees every user still has training
+        data, and every user has something to evaluate against.
+
+        Returns:
+            train_matrix: pivoted on the FULL dataset's user/movie grid
+                           (same shape as build_user_item_matrix() always) —
+                           this prevents a subtle bug where movies that only
+                           appear in the test split would shrink the matrix.
+            test_df: held-out ratings in long form (userId, movieId, rating)
+        """
+        rng = np.random.default_rng(seed)
+        train_parts = []
+        test_parts = []
+
+        # Split each user's ratings separately, so no user is left with 0 train ratings.
+        for _, group in self._ratings.groupby("userId"):
+            # Shuffle POSITIONS (0, 1, 2, ...), not the group's own index labels —
+            # .iloc selects by position, so this can't mutate the source data
+            # the way shuffling .index did.
+            perm = rng.permutation(len(group))
+            n_test = max(1, int(len(group) * test_frac))
+            test_parts.append(group.iloc[perm[:n_test]])
+            train_parts.append(group.iloc[perm[n_test:]])
+
+        train_df = pd.concat(train_parts).reset_index(drop=True)
+        test_df = pd.concat(test_parts).reset_index(drop=True)
+
+        # Fixed grid from the FULL ratings — train_matrix always has the same
+        # shape/column order as the full user-item matrix, even though it was
+        # built from a subset. Held-out cells become NaN (correctly "unseen").
+        user_index = self._ratings["userId"].sort_values().unique()
+        item_index = self._ratings["movieId"].sort_values().unique()
+
+        train_matrix = (
+            train_df.pivot(index="userId", columns="movieId", values="rating")
+            .reindex(index=user_index, columns=item_index)
+        )
+
+        return train_matrix, test_df
 
 
 # Quick self-test when this file is run directly (python preprocess.py)
