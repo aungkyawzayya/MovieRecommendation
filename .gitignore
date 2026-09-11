@@ -1,0 +1,12 @@
+# Python virtual environment — huge, machine-specific, never commit
+venv/
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# Jupyter checkpoint files
+.ipynb_checkpoints/
+
+# macOS system file
+.DS_Store
