@@ -12,6 +12,10 @@ from scipy.sparse.linalg import svds
 
 
 class SVDRecommender:
+    # Declares that predict() returns a value on the 0.5-5.0 star scale, so
+    # metrics.evaluate_model() will accept it for RMSE/MAE.
+    produces_ratings = True
+
     def __init__(self, n_factors=10, center="user+item", damping=5):
         # n_factors=10, damping=5 — selected together by a 2-D validation
         # grid search (k in {5,10,15,20,30,50} x damping in {1,5,10,25,50}),
@@ -28,12 +32,12 @@ class SVDRecommender:
             raise ValueError("damping must be > 0 (damping=0 divides by zero for unrated items)")
         self.damping = damping
 
-        # "user+item"  -> best RMSE (0.8723) — use for the rating-error table.
-        # "user"       -> best ranking (NDCG@10 0.1060 vs 0.0398, validated in
-        #                 notebook Step 4) — use as the SVD feed into the
-        #                 hybrid blend later. Item bias is a strong error-
-        #                 reducer but it dominates and flattens personalized
-        #                 ranking (measured, see project notes).
+        # "user+item"  -> best RMSE — use for the rating-error table.
+        # "user"       -> best ranking (validation NDCG@10 0.1060 vs 0.0398 at
+        #                 k=10, damping=5, seed=STUDENT_ID) — use as the
+        #                 SVD feed into the hybrid blend later. Item bias is a
+        #                 strong error-reducer but it dominates and flattens
+        #                 personalized ranking (measured, see project notes).
         if center not in ("user", "user+item"):
             raise ValueError('center must be "user" or "user+item"')
         self.center = center
@@ -45,6 +49,7 @@ class SVDRecommender:
 
         # Store the FACTORS, not the full dense reconstruction —
         # (610 x 20) + (20 x 9724) is far smaller than (610 x 9724).
+        self._item_support = None   # how many TRAIN ratings each item has
         self._user_factors = None   # U * sigma  -> shape (n_users, k)
         self._item_factors = None   # Vt         -> shape (k, n_movies)
         self._item_bias = None
@@ -56,6 +61,10 @@ class SVDRecommender:
         self._user_ids = train_matrix.index.to_numpy()
         self._movie_ids = train_matrix.columns.to_numpy()
         self._seen_mask = train_matrix.notna().to_numpy()
+        # Items with 0 train ratings still get a "prediction" (user mean +
+        # zero bias) — evaluation needs to know that is a fallback, not a
+        # collaborative result. See supported_items below.
+        self._item_support = self._seen_mask.sum(axis=0)
 
         matrix = train_matrix.to_numpy()
 
@@ -66,9 +75,8 @@ class SVDRecommender:
 
         if self.center == "user+item":
             # Item bias: average deviation from each rater's own mean, damped
-            # by (count + self.damping) so an item with only 1-2 ratings
-            # doesn't get an extreme bias from noise (a single 5-star
-            # shouldn't imply +5).
+            # by (count + self.damping) so an item with 1-2 ratings doesn't get an
+            # extreme bias from noise (a single 5-star shouldn't imply +5).
             residual_sum = np.nansum(user_centered, axis=0)
             rating_count = np.sum(~np.isnan(user_centered), axis=0)
             self._item_bias = residual_sum / (rating_count + self.damping)
@@ -93,6 +101,17 @@ class SVDRecommender:
         self._user_factors = U * sigma  # fold sigma into U once, reuse forever
         self._item_factors = Vt
         return self
+
+    @property
+    def supported_items(self):
+        """
+        movieIds this model has real collaborative evidence for (>=1 train
+        rating). Everything else reconstructs to the user's own mean, so
+        counting those as "predicted" overstates coverage.
+        """
+        if self._item_support is None:
+            return None
+        return self._movie_ids[self._item_support > 0]
 
     def score_all_items(self, user_id, clip=True):
         """

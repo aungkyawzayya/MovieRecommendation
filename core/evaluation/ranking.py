@@ -26,16 +26,20 @@ def build_relevant_items(df, threshold=4.0, user_col="userId", movie_col="movieI
 
 def precision_at_k(recommended_ids, relevant_ids, k):
     """
-    Fraction of the top-k SLOTS that are relevant — divides by k, not by
-    however many items were actually returned. A model that returns fewer
-    than k items (e.g. content-based, after dropping text-less movies) must
-    be PENALIZED for the empty slots, not scored only on what it managed to
-    fill; dividing by len(top_k) instead of k was a real bug here that
-    quietly inflated precision whenever a recommendation list came up short.
+    Fraction of the top-k recommended items that are relevant.
+
+    Denominator is k, NOT len(top_k). Dividing by the list length rewards a
+    model for returning a SHORT list: 1 hit out of 3 returned items scored
+    0.3333 instead of the correct 0.1000 — a 3.3x overstatement. Short lists
+    happen in practice (the content model can only rank the 36% of movies
+    that have plot text, then drops the ones the user already rated), so
+    unfilled slots must count against the model, not be quietly excluded.
     """
     if k <= 0:
         return None
     top_k = recommended_ids[:k]
+    if len(top_k) == 0:
+        return None  # model had no opinion at all — a coverage problem, not a score
     hits = sum(1 for item in top_k if item in relevant_ids)
     return hits / k
 
@@ -88,12 +92,16 @@ def evaluate_ranking(recommend_fn, relevant_by_user, k=10):
     ranking metrics do.
     """
     precisions, recalls, ndcgs = [], [], []
+    n_scored = 0          # users that produced a ranked list at all
+    n_no_recs = 0         # users the model returned nothing for
     for user_id, relevant in relevant_by_user.items():
         if not relevant:
             continue
         rec_ids = recommend_fn(user_id)
         if not rec_ids:
+            n_no_recs += 1
             continue
+        n_scored += 1
         p = precision_at_k(rec_ids, relevant, k)
         r = recall_at_k(rec_ids, relevant, k)
         n = ndcg_at_k(rec_ids, relevant, k)
@@ -104,9 +112,70 @@ def evaluate_ranking(recommend_fn, relevant_by_user, k=10):
         if n is not None:
             ndcgs.append(n)
 
+    # Each metric can individually return None, so the three means are not
+    # guaranteed to be averaged over the same users. Reporting one
+    # "n_users": len(precisions) for all three hid that. n_users is now the
+    # number of users actually scored, and n_* records what each mean was
+    # really computed over — if those three disagree, the metrics are not
+    # directly comparable and the report needs to say so.
     return {
         f"Precision@{k}": float(np.mean(precisions)) if precisions else None,
         f"Recall@{k}": float(np.mean(recalls)) if recalls else None,
         f"NDCG@{k}": float(np.mean(ndcgs)) if ndcgs else None,
-        "n_users": len(precisions),
+        "n_users": n_scored,
+        "n_precision": len(precisions),
+        "n_recall": len(recalls),
+        "n_ndcg": len(ndcgs),
+        "n_no_recs": n_no_recs,
+    }
+
+
+def evaluate_ranking_at_ks(recommend_fn, relevant_by_user, ks):
+    """
+    Same metrics as evaluate_ranking(), but for SEVERAL cutoffs in one pass.
+
+    evaluate_ranking() called in a `for k in Ks` loop re-runs recommend_fn from
+    scratch on every iteration — measured: 1,806 recommendation builds for 602
+    users across Ks=[5,10,20], 3x more work than needed. The ranked list does
+    not depend on k, only the cutoff does, so this builds it once per user and
+    slices it at each k.
+
+    recommend_fn must return at least max(ks) items per user (the caller asks
+    its model for n=max(Ks)); shorter lists are handled but count unfilled
+    slots against the model, exactly as precision_at_k() does.
+
+    Returns {k: result_dict}, each result_dict identical in shape to what
+    evaluate_ranking() returns for that k.
+    """
+    ks = sorted(ks)
+    acc = {k: {"p": [], "r": [], "n": [], "scored": 0} for k in ks}
+    n_no_recs = 0
+
+    for user_id, relevant in relevant_by_user.items():
+        if not relevant:
+            continue
+        rec_ids = recommend_fn(user_id)   # built ONCE per user, sliced per k below
+        if not rec_ids:
+            n_no_recs += 1
+            continue
+        for k in ks:
+            a = acc[k]
+            a["scored"] += 1
+            for key, fn in (("p", precision_at_k), ("r", recall_at_k), ("n", ndcg_at_k)):
+                value = fn(rec_ids, relevant, k)
+                if value is not None:
+                    a[key].append(value)
+
+    return {
+        k: {
+            f"Precision@{k}": float(np.mean(a["p"])) if a["p"] else None,
+            f"Recall@{k}": float(np.mean(a["r"])) if a["r"] else None,
+            f"NDCG@{k}": float(np.mean(a["n"])) if a["n"] else None,
+            "n_users": a["scored"],
+            "n_precision": len(a["p"]),
+            "n_recall": len(a["r"]),
+            "n_ndcg": len(a["n"]),
+            "n_no_recs": n_no_recs,
+        }
+        for k, a in acc.items()
     }

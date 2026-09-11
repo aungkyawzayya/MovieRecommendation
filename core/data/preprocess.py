@@ -134,15 +134,15 @@ class MovieDataPreprocessor:
         for _, group in self._ratings.groupby("userId"):
             n = len(group)
             perm = rng.permutation(n)
-            n_test = max(1, int(n * test_frac))
+            # Cap n_test at n-1 so at least one rating is always left for train.
+            # Without the cap, a user with a single rating got n_test=1 and
+            # n_val=-1, and perm[n_test + n_val:] == perm[0:] handed that SAME
+            # row to BOTH test and train — a silent train/test leak. Unreachable
+            # on ml-latest-small (min 20 ratings/user) but one user filter away.
+            n_test = min(max(1, int(n * test_frac)), n - 1)
             # val_frac=0.0 (train_test_split's case) -> n_val=0, no validation
             # slice at all, reproducing the old 2-way behaviour exactly.
             n_val = max(1, int(n * val_frac)) if val_frac > 0 else 0
-            # Clamp to >= 0 as well as the upper bound: for a user with very
-            # few ratings, n - n_test - 1 can itself go negative, and an
-            # unclamped negative n_val corrupts the slicing below into a
-            # train/test overlap. Not reachable on ml-latest-small (min 20
-            # ratings/user) but a real bug for any smaller/filtered dataset.
             n_val = max(0, min(n_val, n - n_test - 1))  # always leave >=1 train rating
 
             test_parts.append(group.iloc[perm[:n_test]])

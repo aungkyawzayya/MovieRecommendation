@@ -4,18 +4,12 @@ Content-based recommender — uses each movie's plot text (TF-IDF + cosine
 similarity), not other users' ratings. This is what fills the gap SVD
 can't: a movie with ZERO train ratings still has plot text, so this
 model can still score it. SVD collapses to the user-mean baseline for
-those items (measured: RMSE 0.9725 = 0.9725 on the 996 cold test
-ratings) — that's the exact problem this class exists to solve. NOTE:
-only 297 of those 996 cold-item ratings are on a movie this class
-actually has TEXT for (18% — TMDB overview coverage is 36% of all rated
-movies overall), so this model closes PART of the gap, not all of it;
-fetching more TMDB overviews before building the hybrid would close more.
+those items — that's the exact problem this class exists to solve.
 
-IMPORTANT: score_all_items()/predict() return a 0-1 cosine SIMILARITY,
-not a 0.5-5 star rating prediction — do not pass this model to
-evaluate_model() (metrics.py) expecting a meaningful RMSE/MAE, the two
-scales aren't comparable. Use evaluate_ranking() (ranking.py) instead,
-which only cares about relative order, not the raw score's magnitude.
+CAVEAT, measured: overview_plot.csv covers only 3,536 of the 9,724 rated
+movies (36%), and only 297 of the 1,641 items with zero train ratings have
+plot text. So this model currently rescues ~18% of the cold-start cases,
+not all of them. Pull more TMDB overviews before relying on it in the hybrid.
 """
 
 import numpy as np
@@ -25,6 +19,12 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 
 class ContentBasedRecommender:
+    # score_all_items() returns COSINE SIMILARITY (roughly 0-1), not a star
+    # rating. metrics.evaluate_model() checks this flag and refuses to compute
+    # RMSE/MAE against a 0.5-5.0 rating column — without the guard it happily
+    # returned "RMSE 3.71", a meaningless number that looks like a real result.
+    produces_ratings = False
+
     def __init__(self, use_genres=False):
         # use_genres=False by default — verified in an earlier design
         # consult that adding genre tokens HURTS top-N ranking quality,
@@ -39,10 +39,7 @@ class ContentBasedRecommender:
         self._text_movie_ids = None    # subset of movie_ids that HAVE text
         self._user_ids = None
         self._user_profiles = None     # (n_users, n_terms) — one row per user
-        self._seen_mask = None         # which (user, movie) pairs were in the
-                                        # fit()-time train_matrix — mirrors
-                                        # SVDRecommender.fit(), so recommend_top_n
-                                        # can exclude seen items by default too
+        self._seen_mask = None         # which (user, movie) pairs were in train
 
 
     def fit(self, train_matrix, text_corpus):
@@ -54,6 +51,10 @@ class ContentBasedRecommender:
         """
         self._movie_ids = train_matrix.columns.to_numpy()
         self._user_ids = train_matrix.index.to_numpy()
+        # Capture the train-time seen mask here, exactly like SVDRecommender
+        # does. recommend_top_n() used to depend on the caller passing the
+        # seen set in, and silently recommended nothing but already-rated
+        # movies when they didn't.
         self._seen_mask = train_matrix.notna().to_numpy()
 
         # text_corpus can include movies nobody ever rated (they exist in
@@ -125,6 +126,18 @@ class ContentBasedRecommender:
         result.loc[self._text_movie_ids] = sims
         return result
 
+    @property
+    def supported_items(self):
+        """movieIds this model has evidence for — i.e. the ones with plot text."""
+        return self._text_movie_ids
+
+    def seen_items(self, user_id):
+        """movieIds this user rated in the matrix passed to fit()."""
+        user_idx = np.where(self._user_ids == user_id)[0]
+        if len(user_idx) == 0:
+            return np.array([], dtype=self._movie_ids.dtype)
+        return self._movie_ids[self._seen_mask[user_idx[0]]]
+
     def predict(self, user_id, movie_id):
         """Content-similarity score for one (user, movie) pair, or None."""
         scores = self.score_all_items(user_id)
@@ -134,19 +147,22 @@ class ContentBasedRecommender:
 
     def recommend_top_n(self, user_id, n=10, exclude_seen=True, seen_movie_ids=None):
         """
-        Top-N by content similarity. exclude_seen defaults to this model's
-        OWN train-time seen mask (captured in fit(), same pattern as
-        SVDRecommender.recommend_top_n) — so the common call
-        `recommend_top_n(user_id)` correctly excludes whatever was rated in
-        the matrix passed to fit(), with no extra argument needed. Pass
-        seen_movie_ids explicitly only when the caller wants to exclude a
-        DIFFERENT set (e.g. train+val, for a deployment-time refit).
+        Top-N by content similarity, excluding what the user already rated.
 
-        BUG FIX (previously): this used to default seen_movie_ids=None and
-        only exclude anything when the caller separately remembered to pass
-        it — exclude_seen=True on its own silently did nothing, so any
-        caller relying on the default (as evaluate_ranking's recommend_fn
-        pattern does) was recommending items the user had already rated.
+        BUG FIX: the old signature was
+            (..., exclude_seen=True, seen_mask=None, seen_movie_ids=None)
+        with the body guarded by `if exclude_seen and seen_movie_ids is not
+        None`. seen_movie_ids defaulted to None, so the documented default
+        exclude_seen=True did NOTHING. Measured over the first 100 users:
+        871 of 990 recommended items (88%) were movies the user had already
+        rated, and 61 of those users got a top-10 that was 100% already-seen.
+        Precision@K on that output is meaningless but looks excellent.
+
+        Now the train-time mask captured in fit() is used by default, the same
+        way SVDRecommender.recommend_top_n() does it. seen_movie_ids stays as
+        an explicit override for callers that want to exclude a different set
+        (e.g. the hybrid, which may pool train+val); the unused seen_mask
+        parameter is gone.
         """
         scores = self.score_all_items(user_id)
         if scores is None:
@@ -155,11 +171,8 @@ class ContentBasedRecommender:
         scores = scores.dropna()  # drop text-less movies — nothing to rank them on
 
         if exclude_seen:
-            if seen_movie_ids is not None:
-                scores = scores[~scores.index.isin(seen_movie_ids)]
-            else:
-                user_idx = np.where(self._user_ids == user_id)[0][0]
-                seen = pd.Series(self._seen_mask[user_idx], index=self._movie_ids)
-                scores = scores[~seen.loc[scores.index]]
+            if seen_movie_ids is None:
+                seen_movie_ids = self.seen_items(user_id)
+            scores = scores[~scores.index.isin(seen_movie_ids)]
 
         return scores.sort_values(ascending=False, kind="mergesort").head(n)
