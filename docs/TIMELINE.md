@@ -29,6 +29,7 @@ treat it as a running log, not a one-time plan.
 | 11 Sep | Code review pass (bug fixes): content model's seen-item exclusion, precision@k denominator, coverage-reporting honesty, split() edge case, ~40x eval speedup | `552e593`, `08e8611` |
 | 11 Sep | Notebook Step 5 — content-based model exercised end to end (coverage, use_genres selection, test evaluation, SVD comparison) | `08e8611` |
 | 11 Sep | Notebook Step 6 — Responsible AI: popularity bias (SVD vs content vs naive baseline) and cold-start fairness | `c26b848` |
+| 11 Sep | Hybrid model (SVD + Content, per-user z-score blend) — notebook Steps 7/8: weighted hybrid beats the Most-Popular baseline on NDCG at 3/3 cutoffs (SVD alone: 0/3); a switching-mode ablation reaches cold-start items far more often than the weighted blend | `83c5ff7` |
 
 ## Where that leaves us (as of 11 Sep, still inside proposal Week 1)
 
@@ -39,14 +40,13 @@ proposal. Roughly a week and a half ahead of the submitted plan on the
 modelling side — the trade a proper 3-way split (not in the original plan)
 bought back by catching test-leakage early rather than during the report.
 
-Not started yet: AutoRec (Week 4) and the hybrid combination (Week 5).
+Now the hybrid (originally Week 5) is done too, same day. Not started yet: AutoRec (Week 4).
 
 ## Suggested revised plan (adjust as needed — the Oct 23 date is fixed, everything before it is not)
 
 | Target dates | Milestone |
 |---|---|
-| now – ~21 Sep | Hybrid combination (SVD + content, per-user z-score blend, alpha tuned on validation) — brought forward since both inputs are ready |
-| ~22 Sep – 5 Oct | AutoRec (PyTorch, I-AutoRec) — kept close to the original 1-week budget, with slack either side since this is new territory (first PyTorch model) |
+| now – ~5 Oct | AutoRec (PyTorch, I-AutoRec) — can start immediately since the hybrid landed early too; kept a generous window since this is new territory (first PyTorch model) |
 | 6 – 12 Oct | Full evaluation across all four models, ablations, polish |
 | 13 – 19 Oct | Report writing, video recording, code freeze |
 | 20 – 23 Oct | Final review and submission |
