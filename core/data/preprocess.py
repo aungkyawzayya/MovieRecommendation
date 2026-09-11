@@ -9,10 +9,30 @@ Similar to a C# class: private fields + public methods.
 import pandas as pd
 import numpy as np
 from pathlib import Path
+from dataclasses import dataclass
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data" / "ml-latest-small"
 OVERVIEW_PATH = PROJECT_ROOT / "data" / "overview_plot.csv"
+
+# COMP813 convention (matches the lecturer's Assignment 1 seeding): seed
+# every random split with the student ID, so the split is reproducible
+# AND identifiably "this student's" run if anyone re-executes the notebook.
+STUDENT_ID = 24265298
+
+
+@dataclass
+class DataSplit:
+    """
+    Bundles what a 3-way train/validation/test split produces. A plain
+    tuple return here would be easy to unpack in the wrong order — a
+    dataclass makes each piece self-naming, like a C# result/DTO class.
+    """
+    train_matrix: pd.DataFrame       # 60% — fit models here while TUNING
+    trainval_matrix: pd.DataFrame    # 80% (train+val) — final refit, once tuning is done
+    train_df: pd.DataFrame
+    val_df: pd.DataFrame             # 20% — pick hyperparameters (k, alpha, ...) here
+    test_df: pd.DataFrame            # 20% — touch ONCE, only to report final numbers
 
 
 class MovieDataPreprocessor:
@@ -80,48 +100,74 @@ class MovieDataPreprocessor:
         """
         return self._ratings
 
-    def train_test_split(self, test_frac=0.2, seed=42):
+    def _pivot(self, ratings_df):
         """
-        Per-user split: holds out test_frac of EACH user's ratings (not a
-        global random split) — this guarantees every user still has training
-        data, and every user has something to evaluate against.
-
-        Returns:
-            train_matrix: pivoted on the FULL dataset's user/movie grid
-                           (same shape as build_user_item_matrix() always) —
-                           this prevents a subtle bug where movies that only
-                           appear in the test split would shrink the matrix.
-            test_df: held-out ratings in long form (userId, movieId, rating)
+        Pivot a long-form ratings DataFrame into the FULL 610 x 9724 grid —
+        same user/item index every time, regardless of which subset of rows
+        is passed in, so train/val/test matrices always line up column-for-
+        column with each other and with SVDRecommender/ContentBasedRecommender.
         """
-        rng = np.random.default_rng(seed)
-        train_parts = []
-        test_parts = []
-
-        # Split each user's ratings separately, so no user is left with 0 train ratings.
-        for _, group in self._ratings.groupby("userId"):
-            # Shuffle POSITIONS (0, 1, 2, ...), not the group's own index labels —
-            # .iloc selects by position, so this can't mutate the source data
-            # the way shuffling .index did.
-            perm = rng.permutation(len(group))
-            n_test = max(1, int(len(group) * test_frac))
-            test_parts.append(group.iloc[perm[:n_test]])
-            train_parts.append(group.iloc[perm[n_test:]])
-
-        train_df = pd.concat(train_parts).reset_index(drop=True)
-        test_df = pd.concat(test_parts).reset_index(drop=True)
-
-        # Fixed grid from the FULL ratings — train_matrix always has the same
-        # shape/column order as the full user-item matrix, even though it was
-        # built from a subset. Held-out cells become NaN (correctly "unseen").
         user_index = self._ratings["userId"].sort_values().unique()
         item_index = self._ratings["movieId"].sort_values().unique()
-
-        train_matrix = (
-            train_df.pivot(index="userId", columns="movieId", values="rating")
+        return (
+            ratings_df.pivot(index="userId", columns="movieId", values="rating")
             .reindex(index=user_index, columns=item_index)
         )
 
-        return train_matrix, test_df
+    def split(self, val_frac=0.2, test_frac=0.2, seed=STUDENT_ID):
+        """
+        Per-user 3-way split — train_test_split() below is a thin wrapper
+        around this with val_frac=0.0. The test slice is always
+        perm[:n_test], computed BEFORE the validation slice is carved out,
+        so split(val_frac=0.2, test_frac=0.2, seed=S) and
+        split(val_frac=0.0, test_frac=0.2, seed=S) select the identical
+        test rows — adding validation never disturbs the test set.
+
+        Use .train_matrix while TUNING hyperparameters (k, alpha, ...)
+        against .val_df. Once a choice is locked in, refit on
+        .trainval_matrix and report metrics against .test_df exactly once —
+        never use test performance to make a decision.
+        """
+        rng = np.random.default_rng(seed)
+        train_parts, val_parts, test_parts = [], [], []
+
+        for _, group in self._ratings.groupby("userId"):
+            n = len(group)
+            perm = rng.permutation(n)
+            n_test = max(1, int(n * test_frac))
+            # val_frac=0.0 (train_test_split's case) -> n_val=0, no validation
+            # slice at all, reproducing the old 2-way behaviour exactly.
+            n_val = max(1, int(n * val_frac)) if val_frac > 0 else 0
+            n_val = min(n_val, n - n_test - 1)  # always leave >=1 train rating
+
+            test_parts.append(group.iloc[perm[:n_test]])
+            val_parts.append(group.iloc[perm[n_test:n_test + n_val]])
+            train_parts.append(group.iloc[perm[n_test + n_val:]])
+
+        train_df = pd.concat(train_parts).reset_index(drop=True)
+        val_df = pd.concat(val_parts).reset_index(drop=True)
+        test_df = pd.concat(test_parts).reset_index(drop=True)
+
+        return DataSplit(
+            train_matrix=self._pivot(train_df),
+            trainval_matrix=self._pivot(pd.concat([train_df, val_df])),
+            train_df=train_df,
+            val_df=val_df,
+            test_df=test_df,
+        )
+
+    def train_test_split(self, test_frac=0.2, seed=STUDENT_ID):
+        """
+        Kept for existing notebook cells written against this 2-way
+        signature. A thin wrapper around split(val_frac=0.0, ...) — no
+        validation slice, same behaviour as the original implementation.
+
+        Returns:
+            train_matrix: pivoted on the FULL dataset's user/movie grid.
+            test_df: held-out ratings in long form (userId, movieId, rating)
+        """
+        result = self.split(val_frac=0.0, test_frac=test_frac, seed=seed)
+        return result.train_matrix, result.test_df
 
 
 # Quick self-test when this file is run directly (python preprocess.py)

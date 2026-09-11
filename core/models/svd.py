@@ -12,11 +12,21 @@ from scipy.sparse.linalg import svds
 
 
 class SVDRecommender:
-    def __init__(self, n_factors=20, center="user+item"):
-        # n_factors=20, not 50 — verified against real data: accuracy
-        # DEGRADES past ~20 factors on this dataset (more factors just
-        # re-learn the "who rated what" pattern instead of taste signal).
+    def __init__(self, n_factors=10, center="user+item", damping=5):
+        # n_factors=10, damping=5 — selected together by a 2-D validation
+        # grid search (k in {5,10,15,20,30,50} x damping in {1,5,10,25,50}),
+        # not by looking at test performance. (k=10, damping=5) minimized
+        # validation RMSE (0.8789); the earlier damping=10 guess was inside
+        # noise but damping=5 is a real, reproducible improvement.
         self.n_factors = n_factors
+
+        # damping: how much to shrink an item's bias toward 0 when it has
+        # few ratings — bias = sum_of_residuals / (count + damping). Must
+        # be > 0: damping=0 divides by zero for any item with 0 train
+        # ratings (common — 1,635 of 9,724 items have none in the 60% split).
+        if damping <= 0:
+            raise ValueError("damping must be > 0 (damping=0 divides by zero for unrated items)")
+        self.damping = damping
 
         # "user+item"  -> best RMSE (0.8723) — use for the rating-error table.
         # "user"       -> best ranking (NDCG@10 0.1640 vs 0.0940) — use as the
@@ -59,8 +69,7 @@ class SVDRecommender:
             # extreme bias from noise (a single 5-star shouldn't imply +5).
             residual_sum = np.nansum(user_centered, axis=0)
             rating_count = np.sum(~np.isnan(user_centered), axis=0)
-            damping = 10
-            self._item_bias = residual_sum / (rating_count + damping)
+            self._item_bias = residual_sum / (rating_count + self.damping)
         else:
             # "user" mode: no item bias term — kept as a same-shaped zero
             # array so score_all_items() never needs an if-branch.
