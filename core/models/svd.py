@@ -113,6 +113,17 @@ class SVDRecommender:
             return None
         return self._movie_ids[self._item_support > 0]
 
+    def seen_items(self, user_id):
+        """
+        movieIds this user rated in the matrix passed to fit() — same
+        convention as ContentBasedRecommender.seen_items(), so the hybrid
+        combiner can call either model's version identically.
+        """
+        user_idx = np.where(self._user_ids == user_id)[0]
+        if len(user_idx) == 0:
+            return np.array([], dtype=self._movie_ids.dtype)
+        return self._movie_ids[self._seen_mask[user_idx[0]]]
+
     def score_all_items(self, user_id, clip=True):
         """
         Predicted rating for EVERY movie, for one user — returns a pandas
@@ -160,9 +171,8 @@ class SVDRecommender:
             return pd.Series(dtype=float)  # unknown user -> no recommendations
 
         if exclude_seen:
-            user_idx = np.where(self._user_ids == user_id)[0][0]
-            seen = pd.Series(self._seen_mask[user_idx], index=self._movie_ids)
-            scores = scores[~seen]
+            seen = self.seen_items(user_id)
+            scores = scores[~scores.index.isin(seen)]
 
         # kind="mergesort" is a STABLE sort — ties keep their original order,
         # and `scores` starts out indexed in ascending movieId order, so ties
