@@ -138,7 +138,12 @@ class MovieDataPreprocessor:
             # val_frac=0.0 (train_test_split's case) -> n_val=0, no validation
             # slice at all, reproducing the old 2-way behaviour exactly.
             n_val = max(1, int(n * val_frac)) if val_frac > 0 else 0
-            n_val = min(n_val, n - n_test - 1)  # always leave >=1 train rating
+            # Clamp to >= 0 as well as the upper bound: for a user with very
+            # few ratings, n - n_test - 1 can itself go negative, and an
+            # unclamped negative n_val corrupts the slicing below into a
+            # train/test overlap. Not reachable on ml-latest-small (min 20
+            # ratings/user) but a real bug for any smaller/filtered dataset.
+            n_val = max(0, min(n_val, n - n_test - 1))  # always leave >=1 train rating
 
             test_parts.append(group.iloc[perm[:n_test]])
             val_parts.append(group.iloc[perm[n_test:n_test + n_val]])

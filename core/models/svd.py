@@ -23,16 +23,17 @@ class SVDRecommender:
         # damping: how much to shrink an item's bias toward 0 when it has
         # few ratings — bias = sum_of_residuals / (count + damping). Must
         # be > 0: damping=0 divides by zero for any item with 0 train
-        # ratings (common — 1,635 of 9,724 items have none in the 60% split).
+        # ratings (common — 1,641 of 9,724 items have none in the 60% split).
         if damping <= 0:
             raise ValueError("damping must be > 0 (damping=0 divides by zero for unrated items)")
         self.damping = damping
 
         # "user+item"  -> best RMSE (0.8723) — use for the rating-error table.
-        # "user"       -> best ranking (NDCG@10 0.1640 vs 0.0940) — use as the
-        #                 SVD feed into the hybrid blend later. Item bias is a
-        #                 strong error-reducer but it dominates and flattens
-        #                 personalized ranking (measured, see project notes).
+        # "user"       -> best ranking (NDCG@10 0.1060 vs 0.0398, validated in
+        #                 notebook Step 4) — use as the SVD feed into the
+        #                 hybrid blend later. Item bias is a strong error-
+        #                 reducer but it dominates and flattens personalized
+        #                 ranking (measured, see project notes).
         if center not in ("user", "user+item"):
             raise ValueError('center must be "user" or "user+item"')
         self.center = center
@@ -65,8 +66,9 @@ class SVDRecommender:
 
         if self.center == "user+item":
             # Item bias: average deviation from each rater's own mean, damped
-            # by (count + 10) so an item with only 1-2 ratings doesn't get an
-            # extreme bias from noise (a single 5-star shouldn't imply +5).
+            # by (count + self.damping) so an item with only 1-2 ratings
+            # doesn't get an extreme bias from noise (a single 5-star
+            # shouldn't imply +5).
             residual_sum = np.nansum(user_centered, axis=0)
             rating_count = np.sum(~np.isnan(user_centered), axis=0)
             self._item_bias = residual_sum / (rating_count + self.damping)

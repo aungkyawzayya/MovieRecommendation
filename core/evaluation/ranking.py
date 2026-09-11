@@ -25,12 +25,19 @@ def build_relevant_items(df, threshold=4.0, user_col="userId", movie_col="movieI
 
 
 def precision_at_k(recommended_ids, relevant_ids, k):
-    """Fraction of the top-k recommended items that are relevant."""
-    top_k = recommended_ids[:k]
-    if len(top_k) == 0:
+    """
+    Fraction of the top-k SLOTS that are relevant — divides by k, not by
+    however many items were actually returned. A model that returns fewer
+    than k items (e.g. content-based, after dropping text-less movies) must
+    be PENALIZED for the empty slots, not scored only on what it managed to
+    fill; dividing by len(top_k) instead of k was a real bug here that
+    quietly inflated precision whenever a recommendation list came up short.
+    """
+    if k <= 0:
         return None
+    top_k = recommended_ids[:k]
     hits = sum(1 for item in top_k if item in relevant_ids)
-    return hits / len(top_k)
+    return hits / k
 
 
 def recall_at_k(recommended_ids, relevant_ids, k):
