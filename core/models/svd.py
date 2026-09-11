@@ -41,14 +41,22 @@ class SVDRecommender:
         # Mean-center each user's ratings (removes "some users rate everything
         # 5 stars" bias) BEFORE filling missing values with 0.
         self._user_means = np.nanmean(matrix, axis=1)
-        centered = matrix - self._user_means.reshape(-1, 1)
-        centered = np.nan_to_num(centered, nan=0.0)
+        user_centered = matrix - self._user_means.reshape(-1, 1)
 
-        # svds returns singular values in ASCENDING order (unlike np.linalg.svd) —
-        # sort descending so factor 0 is the most important one.
-        U, sigma, Vt = svds(centered, k=self.n_factors)
-        order = np.argsort(-sigma)
-        U, sigma, Vt = U[:, order], sigma[order], Vt[order, :]
+        # Item bias: average deviation from each rater's own mean, damped by
+        # (count + 10) so an item with only 1-2 ratings doesn't get an extreme
+        # bias from noise (e.g. a single 5-star rating shouldn't imply +5 bias).
+        residual_sum = np.nansum(user_centered, axis=0)
+        rating_count = np.sum(~np.isnan(user_centered), axis=0)
+        damping = 10
+        self._item_bias = residual_sum / (rating_count + damping)
+
+        # Remove item bias too, before SVD — factors now only need to explain
+        # the leftover signal, not the "this item is just generally liked/
+        # disliked relative to raters' own averages" effect.
+        residual = user_centered - self._item_bias.reshape(1, -1)
+        residual = np.nan_to_num(residual, nan=0.0)
+        U, sigma, Vt = svds(residual, k=self.n_factors)
 
         self._user_factors = U * sigma  # fold sigma into U once, reuse forever
         self._item_factors = Vt
@@ -68,8 +76,8 @@ class SVDRecommender:
 
         # One matrix-vector multiply reconstructs this user's full predicted row.
         predicted = self._user_factors[user_idx] @ self._item_factors
-        predicted = predicted + self._user_means[user_idx]
-        predicted = np.clip(predicted, 0.5, 5.0)  # ratings can't go outside 0.5-5.0
+        predicted = predicted + self._user_means[user_idx] + self._item_bias
+        predicted = np.clip(predicted, 0.5, 5.0)  # ratings can't go outside 0.5-5.0        
 
         return pd.Series(predicted, index=self._movie_ids)
 
