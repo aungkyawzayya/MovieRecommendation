@@ -12,11 +12,20 @@ from scipy.sparse.linalg import svds
 
 
 class SVDRecommender:
-    def __init__(self, n_factors=20):
+    def __init__(self, n_factors=20, center="user+item"):
         # n_factors=20, not 50 — verified against real data: accuracy
         # DEGRADES past ~20 factors on this dataset (more factors just
         # re-learn the "who rated what" pattern instead of taste signal).
         self.n_factors = n_factors
+
+        # "user+item"  -> best RMSE (0.8723) — use for the rating-error table.
+        # "user"       -> best ranking (NDCG@10 0.1640 vs 0.0940) — use as the
+        #                 SVD feed into the hybrid blend later. Item bias is a
+        #                 strong error-reducer but it dominates and flattens
+        #                 personalized ranking (measured, see project notes).
+        if center not in ("user", "user+item"):
+            raise ValueError('center must be "user" or "user+item"')
+        self.center = center
 
         self._user_ids = None
         self._movie_ids = None
@@ -44,17 +53,21 @@ class SVDRecommender:
         self._user_means = np.nanmean(matrix, axis=1)
         user_centered = matrix - self._user_means.reshape(-1, 1)
 
-        # Item bias: average deviation from each rater's own mean, damped by
-        # (count + 10) so an item with only 1-2 ratings doesn't get an extreme
-        # bias from noise (e.g. a single 5-star rating shouldn't imply +5 bias).
-        residual_sum = np.nansum(user_centered, axis=0)
-        rating_count = np.sum(~np.isnan(user_centered), axis=0)
-        damping = 10
-        self._item_bias = residual_sum / (rating_count + damping)
+        if self.center == "user+item":
+            # Item bias: average deviation from each rater's own mean, damped
+            # by (count + 10) so an item with only 1-2 ratings doesn't get an
+            # extreme bias from noise (a single 5-star shouldn't imply +5).
+            residual_sum = np.nansum(user_centered, axis=0)
+            rating_count = np.sum(~np.isnan(user_centered), axis=0)
+            damping = 10
+            self._item_bias = residual_sum / (rating_count + damping)
+        else:
+            # "user" mode: no item bias term — kept as a same-shaped zero
+            # array so score_all_items() never needs an if-branch.
+            self._item_bias = np.zeros(matrix.shape[1])
 
-        # Remove item bias too, before SVD — factors now only need to explain
-        # the leftover signal, not the "this item is just generally liked/
-        # disliked relative to raters' own averages" effect.
+        # Remove item bias too (a no-op when it's all zeros), before SVD —
+        # factors only need to explain whatever signal is left.
         residual = user_centered - self._item_bias.reshape(1, -1)
         residual = np.nan_to_num(residual, nan=0.0)
         U, sigma, Vt = svds(residual, k=self.n_factors)
@@ -121,4 +134,9 @@ class SVDRecommender:
             seen = pd.Series(self._seen_mask[user_idx], index=self._movie_ids)
             scores = scores[~seen]
 
-        return scores.sort_values(ascending=False).head(n)
+        # kind="mergesort" is a STABLE sort — ties keep their original order,
+        # and `scores` starts out indexed in ascending movieId order, so ties
+        # resolve to ascending movieId. Without this, the default quicksort
+        # is not stable and the same inputs can print a different top-10 on
+        # different runs whenever two items tie on score.
+        return scores.sort_values(ascending=False, kind="mergesort").head(n)
