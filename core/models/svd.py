@@ -27,6 +27,7 @@ class SVDRecommender:
         # (610 x 20) + (20 x 9724) is far smaller than (610 x 9724).
         self._user_factors = None   # U * sigma  -> shape (n_users, k)
         self._item_factors = None   # Vt         -> shape (k, n_movies)
+        self._item_bias = None
 
     def fit(self, train_matrix):
         """
