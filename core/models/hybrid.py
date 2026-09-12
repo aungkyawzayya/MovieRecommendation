@@ -6,10 +6,62 @@ the user-mean baseline for items with zero train ratings (Step 6's
 cold-start evidence), and the content model only has plot text for 36% of
 the catalogue (Step 5) — this class exists to cover what either one misses
 on its own.
+
+Also designed to NEST: a HybridRecommender can itself sit in either slot of
+another HybridRecommender (e.g. combining SVD+AutoRec first, then blending
+that with content — see notebook Step 11). That needs HybridRecommender to
+satisfy the exact same contract SVDRecommender/AutoRecRecommender already
+do (score_all_items(user_id, clip=...), item_ids, supported_items,
+seen_items) — the two small additions below (the clip parameter and the
+item_ids property) exist for that reason, not for anything used inside
+this file itself.
 """
 
 import numpy as np
 import pandas as pd
+
+
+class RawScoreAdapter:
+    """
+    Lets a rating-scale model (SVDRecommender, AutoRecRecommender) sit in a
+    HybridRecommender's content_model slot.
+
+    That slot is always called as score_all_items(user_id) — no clip
+    argument — because ContentBasedRecommender's own similarity scores have
+    no such parameter. SVD and AutoRec DO have one, defaulting to clip=True,
+    so plugging either straight into the content slot would silently score
+    on the clipped 0.5-5.0 scale right where z-scoring needs the raw one
+    (the same reason the svd_model slot is always called with clip=False —
+    see svd.py's docstring). This adapter forwards every call with
+    clip=False pinned, so no caller can get that wrong by omission.
+
+    Composition, not inheritance: this is not a subtype of the wrapped
+    model, just a thin forwarding shim exposing the interface
+    HybridRecommender's content-slot code actually calls.
+    """
+
+    def __init__(self, model):
+        self._model = model
+
+    def score_all_items(self, user_id):
+        return self._model.score_all_items(user_id, clip=False)
+
+    @property
+    def supported_items(self):
+        return self._model.supported_items
+
+    @property
+    def item_ids(self):
+        return self._model.item_ids
+
+    def seen_items(self, user_id):
+        return self._model.seen_items(user_id)
+
+    def predict(self, user_id, movie_id):
+        return self._model.predict(user_id, movie_id)
+
+    def recommend_top_n(self, user_id, n=10, exclude_seen=True):
+        return self._model.recommend_top_n(user_id, n=n, exclude_seen=exclude_seen)
 
 
 class HybridRecommender:
@@ -133,7 +185,7 @@ class HybridRecommender:
             self._component_cache[user_id] = result
         return result
 
-    def score_all_items(self, user_id):
+    def score_all_items(self, user_id, clip=True):
         """
         Blended score for every item SVD has an opinion on. SVD always
         scores the full catalogue (even cold items, via the user-mean
@@ -142,6 +194,13 @@ class HybridRecommender:
         clip=False: ranking needs the raw distribution, not ratings pinned
         to the 5.0 ceiling — see svd.py's docstring on why clipping would
         flatten exactly the differences z-scoring depends on.
+
+        clip IS ACCEPTED BUT IGNORED: the blended output is a z-score, not
+        a 0.5-5.0 rating, so "clip to the rating range" has no meaning here.
+        The parameter exists purely so a HybridRecommender can be nested
+        inside another one's svd_model slot, which always calls
+        score_all_items(user_id, clip=False) — without accepting the
+        keyword this would raise TypeError the moment nesting was tried.
         """
         svd_z, content_z_full = self._components(user_id)
         if svd_z is None:
@@ -172,6 +231,18 @@ class HybridRecommender:
     def supported_items(self):
         """Either model having real evidence counts as this hybrid having evidence."""
         return np.union1d(self._svd.supported_items, self._content.supported_items)
+
+    @property
+    def item_ids(self):
+        """
+        Every movieId this hybrid can score over — delegates to the
+        svd_model slot's own grid, since that slot always scores the full
+        catalogue (see score_all_items's docstring). Same purpose as
+        SVDRecommender.item_ids / AutoRecRecommender.item_ids: lets this
+        object sit in ANOTHER HybridRecommender's svd_model slot, whose
+        rankable_items property (weighted mode) reads self._svd.item_ids.
+        """
+        return self._svd.item_ids
 
     @property
     def rankable_items(self):
@@ -205,7 +276,8 @@ class HybridRecommender:
         Top-N by blended score. Same interface as SVDRecommender /
         ContentBasedRecommender on purpose — evaluate_ranking_at_ks() and
         friends don't need to change to evaluate this model, and neither
-        will they when AutoRec is added later.
+        did they when AutoRec was added, or when a HybridRecommender was
+        nested inside another one.
         """
         scores = self.score_all_items(user_id)
         if scores is None:
