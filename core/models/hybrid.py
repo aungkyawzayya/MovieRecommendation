@@ -40,6 +40,12 @@ class RawScoreAdapter:
     HybridRecommender's content-slot code actually calls.
     """
 
+    # Not read by anything in this file (only score_all_items/supported_items/
+    # etc. are), but evaluate_model() does getattr(model, "produces_ratings",
+    # True) - without this, an adapter passed there by mistake would default
+    # to True and report a meaningless RMSE against its own unclipped scores.
+    produces_ratings = False
+
     def __init__(self, model):
         self._model = model
 
