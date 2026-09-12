@@ -60,7 +60,8 @@ class AutoRecRecommender:
     produces_ratings = True
 
     def __init__(self, hidden_dim=100, lr=1e-3, weight_decay=1e-4,
-                 epochs=300, patience=20, input_fill="zero", seed=STUDENT_ID):
+                 epochs=300, patience=20, input_fill="zero", batch_size=None,
+                 seed=STUDENT_ID):
         self.hidden_dim = hidden_dim
         self.lr = lr
         self.weight_decay = weight_decay
@@ -74,6 +75,22 @@ class AutoRecRecommender:
         if input_fill not in ("zero", "mean"):
             raise ValueError('input_fill must be "zero" or "mean"')
         self.input_fill = input_fill
+        # Mini-batching over ITEMS. Full-batch (batch_size=None) takes exactly
+        # ONE gradient step per epoch, so epochs=80 meant 80 updates total for
+        # a model with up to ~611k parameters — several configs early-stopped
+        # after fewer than 10 updates, i.e. before training had begun. The
+        # grid was then measuring how far each config happened to get, not its
+        # capacity. At batch_size=256 an epoch is ~38 updates, each ~1/38 the
+        # cost, so the SAME wall-clock budget buys ~38x more updates.
+        # Measured outcome: at this dataset's scale mini-batching did NOT
+        # help (best val RMSE 0.8815 at batch=256/lr=1e-3 vs 0.8616
+        # full-batch/lr=1e-2), because 38x more updates at the same lr
+        # overshoots into overfitting within 1-3 epochs. Default is None
+        # (full batch) for that reason; the option stays so the comparison
+        # can be reported as an ablation.
+        if batch_size is not None and batch_size < 1:
+            raise ValueError("batch_size must be >= 1, or None for full batch")
+        self.batch_size = batch_size
         self.seed = seed
 
         self._net = None
@@ -153,14 +170,28 @@ class AutoRecRecommender:
         best_val_loss, best_state, best_epoch = float("inf"), None, 0
         epochs_since_improve = 0
 
+        n_samples = X_tensor.shape[0]
+        batch_size = n_samples if self.batch_size is None else min(self.batch_size, n_samples)
+
         for epoch in range(self.epochs):
             self._net.train()
-            optimizer.zero_grad()
-            reconstructed = self._net(X_tensor)
-            loss = _masked_mse(reconstructed, X_tensor, mask_tensor)
-            loss.backward()
-            optimizer.step()
-            train_losses.append(loss.item())
+            # Shuffle item order each epoch so batches aren't always the same
+            # grouping. torch.manual_seed() above makes randperm deterministic,
+            # so runs stay reproducible.
+            perm = torch.randperm(n_samples)
+            epoch_loss_sum, epoch_batches = 0.0, 0
+            for start in range(0, n_samples, batch_size):
+                idx = perm[start:start + batch_size]
+                optimizer.zero_grad()
+                reconstructed = self._net(X_tensor[idx])
+                loss = _masked_mse(reconstructed, X_tensor[idx], mask_tensor[idx])
+                loss.backward()
+                optimizer.step()
+                epoch_loss_sum += loss.item()
+                epoch_batches += 1
+            # One point per EPOCH (mean over its batches), so the loss curve
+            # stays comparable to the full-batch version's one-point-per-epoch.
+            train_losses.append(epoch_loss_sum / max(epoch_batches, 1))
 
             if has_val:
                 self._net.eval()
@@ -232,7 +263,9 @@ class AutoRecRecommender:
         """
         if user_id not in self._reconstruction.index:
             return None
-        scores = self._reconstruction.loc[user_id]
+        # .copy() so a caller can never mutate the cached reconstruction
+        # through the Series it gets back.
+        scores = self._reconstruction.loc[user_id].copy()
         if clip:
             scores = scores.clip(0.5, 5.0)
         return scores
