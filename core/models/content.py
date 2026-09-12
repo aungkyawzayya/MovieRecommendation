@@ -6,10 +6,20 @@ can't: a movie with ZERO train ratings still has plot text, so this
 model can still score it. SVD collapses to the user-mean baseline for
 those items — that's the exact problem this class exists to solve.
 
-CAVEAT, measured: overview_plot.csv covers only 3,536 of the 9,724 rated
-movies (36%), and only 297 of the 1,641 items with zero train ratings have
-plot text. So this model currently rescues ~18% of the cold-start cases,
-not all of them. Pull more TMDB overviews before relying on it in the hybrid.
+COVERAGE, measured: overview_plot.csv was expanded from 4,800 to 10,884
+rows (scripts/fetch_overviews.py), taking text coverage of the rated
+catalogue from 3,536/9,724 (36.4%) to 9,603/9,724 (98.8%), and of items
+with zero train ratings from 18% to 98%. The 121 still uncovered are
+movies TMDB itself has no synopsis for (113) or that carry no tmdbId at
+all (8).
+
+What that bought, measured rather than assumed: this model's cold-start
+reach roughly tripled (163 -> 481 of 6,100 recommended slots) and its
+catalogue coverage rose 17.8% -> 24.9%, but its ranking quality FELL
+(NDCG@10 0.0469 -> 0.0359). Cold items make up only 2.92% of the relevant
+held-out ratings, so every obscure item promoted into a top-10 displaces a
+popular one with a far higher chance of being a hit. That is the
+accuracy-coverage trade-off, not a regression to fix.
 """
 
 import numpy as np
