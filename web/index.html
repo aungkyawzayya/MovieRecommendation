@@ -47,7 +47,6 @@
 <div class="row">
   <label for="userSelect">User:</label>
   <select id="userSelect"></select>
-  <button id="goBtn">Refresh</button>
 </div>
 <div id="userMeta"></div>
 <div id="error"></div>
@@ -61,7 +60,10 @@
     </table>
   </div>
   <div class="column">
-    <h2>Recommended for them (Nested Hybrid model)</h2>
+    <div class="row">
+      <h2 style="margin:0">Recommended for them (Nested Hybrid model)</h2>
+      <button id="recommendBtn">Recommend</button>
+    </div>
     <table id="resultsTable">
       <thead><tr><th></th><th>Title</th><th>Genres</th><th>Score</th></tr></thead>
       <tbody></tbody>
@@ -84,51 +86,50 @@ async function init() {
       opt.textContent = `User ${uid}`;
       select.appendChild(opt);
     }
-    // Changing the dropdown loads the new user immediately (clearing the
-    // old tables first, in loadUser below) — no need to also press the
-    // button. The button stays as an explicit re-fetch (e.g. after the
-    // export file has been regenerated with new data).
-    select.addEventListener('change', () => loadUser(select.value));
-    document.getElementById('goBtn').addEventListener('click', () => loadUser(select.value));
-    if (user_ids.length > 0) loadUser(select.value);
+    // Changing the dropdown only loads the LEFT column (the user's own
+    // ratings) automatically — cheap, and there's nothing to "trigger" in
+    // showing data that already exists. The RIGHT column (the model's
+    // recommendations) only loads when the "Recommend" button is pressed,
+    // on purpose: it reads as an explicit action ("run the model for this
+    // user") instead of happening silently, and it means switching users
+    // can never leave one user's ratings sitting next to a DIFFERENT
+    // user's stale recommendations — see resetRecommendations() below.
+    select.addEventListener('change', () => {
+      loadProfile(select.value);
+      resetRecommendations();
+    });
+    document.getElementById('recommendBtn').addEventListener('click', () => runRecommend(select.value));
+    resetRecommendations();
+    if (user_ids.length > 0) loadProfile(select.value);
   } catch (err) {
     document.getElementById('status').textContent = 'Could not reach the API.';
     document.getElementById('error').textContent = String(err);
   }
 }
 
-async function loadUser(userId) {
+function resetRecommendations() {
+  document.querySelector('#resultsTable tbody').innerHTML =
+    '<tr><td colspan="4" style="color:#999">Click "Recommend" to generate suggestions for this user.</td></tr>';
+}
+
+async function loadProfile(userId) {
   const errorEl = document.getElementById('error');
   const metaEl = document.getElementById('userMeta');
   const profileBody = document.querySelector('#profileTable tbody');
-  const resultsBody = document.querySelector('#resultsTable tbody');
 
-  // Clear EVERYTHING from the previous user first, before either request
-  // resolves — without this, switching from a user with 8 profile rows to
-  // one with fewer would leave stale rows sitting under the new (shorter)
-  // list, silently mixing two users' data on screen.
   errorEl.textContent = '';
   metaEl.textContent = '';
   profileBody.innerHTML = '<tr><td colspan="3">Loading…</td></tr>';
-  resultsBody.innerHTML = '<tr><td colspan="4">Loading…</td></tr>';
 
-  const [profileRes, recRes] = await Promise.all([
-    fetch(`/profile/${userId}?n=8`),
-    fetch(`/recommend/${userId}?n=10`),
-  ]);
-
-  if (!profileRes.ok || !recRes.ok) {
-    const failed = !profileRes.ok ? profileRes : recRes;
-    const body = await failed.json().catch(() => ({}));
-    errorEl.textContent = body.detail || `HTTP ${failed.status}`;
+  const res = await fetch(`/profile/${userId}?n=8`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    errorEl.textContent = body.detail || `HTTP ${res.status}`;
     profileBody.innerHTML = '';
-    resultsBody.innerHTML = '';
     return;
   }
 
-  const profile = await profileRes.json();
-  const rec = await recRes.json();
-
+  const profile = await res.json();
   metaEl.textContent =
     `${profile.n_ratings} ratings on record, average ${profile.mean_rating} stars`;
 
@@ -141,7 +142,24 @@ async function loadUser(userId) {
       `<td class="genres">${escapeHtml(row.genres)}</td>`;
     profileBody.appendChild(tr);
   }
+}
 
+async function runRecommend(userId) {
+  const errorEl = document.getElementById('error');
+  const resultsBody = document.querySelector('#resultsTable tbody');
+
+  errorEl.textContent = '';
+  resultsBody.innerHTML = '<tr><td colspan="4">Loading…</td></tr>';
+
+  const res = await fetch(`/recommend/${userId}?n=10`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    errorEl.textContent = body.detail || `HTTP ${res.status}`;
+    resultsBody.innerHTML = '';
+    return;
+  }
+
+  const rec = await res.json();
   resultsBody.innerHTML = '';
   for (const row of rec.recommendations) {
     const tr = document.createElement('tr');
