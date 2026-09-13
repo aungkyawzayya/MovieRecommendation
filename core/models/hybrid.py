@@ -3,9 +3,10 @@ hybrid.py
 Combines SVD (collaborative filtering) and content-based (plot-text) scores
 into a single ranked list. Neither model alone is enough: SVD collapses to
 the user-mean baseline for items with zero train ratings (Step 6's
-cold-start evidence), and the content model only has plot text for 36% of
-the catalogue (Step 5) — this class exists to cover what either one misses
-on its own.
+cold-start evidence), and even after the TMDB overview expansion the
+content model still has no opinion on 121 movies with no plot text at all
+(content.py's own docstring has the coverage numbers) — this class exists
+to cover what either one misses on its own.
 
 Also designed to NEST: a HybridRecommender can itself sit in either slot of
 another HybridRecommender (e.g. combining SVD+AutoRec first, then blending

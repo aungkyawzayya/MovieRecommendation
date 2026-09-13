@@ -31,9 +31,10 @@ def precision_at_k(recommended_ids, relevant_ids, k):
     Denominator is k, NOT len(top_k). Dividing by the list length rewards a
     model for returning a SHORT list: 1 hit out of 3 returned items scored
     0.3333 instead of the correct 0.1000 — a 3.3x overstatement. Short lists
-    happen in practice (the content model can only rank the 36% of movies
-    that have plot text, then drops the ones the user already rated), so
-    unfilled slots must count against the model, not be quietly excluded.
+    happen in practice (the content model can only rank movies with plot
+    text — 98.8% of the catalogue now, but never all of it — then drops the
+    ones the user already rated), so unfilled slots must count against the
+    model, not be quietly excluded.
     """
     if k <= 0:
         return None
