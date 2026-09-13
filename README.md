@@ -54,7 +54,7 @@ notebooks/01_eda.ipynb    The experimental record: every grid search,
                           ablation, figure and results table in the report
                           comes from here. Steps 1-12.
 
-scripts/                  One-off utilities (see "Scripts" below)
+scripts/                  Data fetching and batch scoring (see below)
 api/main.py               FastAPI serving layer (reads precomputed JSON)
 web/index.html            Single-page demo UI
 docs/TIMELINE.md          Running progress log against the proposal
@@ -145,11 +145,10 @@ was never fit on.
 |---|---|
 | `export_recommendations.py` | Batch-score the deployed model to JSON (step 2 above) |
 | `fetch_overviews.py` | Fetch TMDB plot overviews. Needs `TMDB_API_KEY` in the environment. Raised text coverage from 36.4% to 98.8% of the rated catalogue |
-| `autorec_sweep.py`, `autorec_sweep2.py` | Diagnostics that established AutoRec's training budget |
 
-The remaining `scripts/*_patch.py` files are one-off migrations applied
-during development; they are kept for provenance and do not need to be
-re-run.
+`fetch_overviews.py` only needs re-running to rebuild
+`data/overview_plot.csv` from scratch; the file it produces is already
+included. It is resumable and skips overviews already present.
 
 ---
 
