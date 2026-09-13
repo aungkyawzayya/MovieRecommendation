@@ -39,6 +39,16 @@
   .star-half { position: relative; display: inline-block; color: #ddd; }
   .star-half-fill { position: absolute; top: 0; left: 0; width: 50%; overflow: hidden; color: #e8a33d; }
   td.rating { width: 6.5em; }
+
+  /* Held-out hit: this movie was recommended by a model fit on train+val
+     only, and the user's TEST-split rating (which the model never saw)
+     confirms they liked it. Green because it is evidence the model works,
+     not a warning. */
+  .hit { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 10px;
+         background: #e3f4e8; color: #1f6b38; font-size: 0.72rem; font-weight: 600;
+         white-space: nowrap; vertical-align: middle; }
+  tr.hit-row td { background: #fafdfb; }
+  #hitNote { color: #1f6b38; font-size: 0.82rem; margin-top: 8px; min-height: 1.1em; }
 </style>
 </head>
 <body>
@@ -68,6 +78,7 @@
       <thead><tr><th></th><th>Title</th><th>Genres</th><th>Score</th></tr></thead>
       <tbody></tbody>
     </table>
+    <div id="hitNote"></div>
   </div>
 </div>
 
@@ -108,6 +119,7 @@ async function init() {
 }
 
 function resetRecommendations() {
+  document.getElementById('hitNote').textContent = '';
   document.querySelector('#resultsTable tbody').innerHTML =
     '<tr><td colspan="4" style="color:#999">Click "Recommend" to generate suggestions for this user.</td></tr>';
 }
@@ -161,15 +173,33 @@ async function runRecommend(userId) {
 
   const rec = await res.json();
   resultsBody.innerHTML = '';
+  let hits = 0;
   for (const row of rec.recommendations) {
+    // held_out_rating is set only when this user rated this movie in the
+    // TEST split — data the model was never fit on. So the row is not "a
+    // movie they already rated" showing up by mistake, it is the model
+    // predicting something that turned out to be right.
+    const isHit = row.held_out_rating != null;
+    if (isHit) hits++;
     const tr = document.createElement('tr');
+    if (isHit) tr.className = 'hit-row';
+    const badge = isHit
+      ? `<span class="hit" title="The model was fit on train+val only and never saw this rating">` +
+        `✓ they rated this ${row.held_out_rating}★</span>`
+      : '';
     tr.innerHTML =
       `<td class="rank">${row.rank}</td>` +
-      `<td>${escapeHtml(row.title)}</td>` +
+      `<td>${escapeHtml(row.title)}${badge}</td>` +
       `<td class="genres">${escapeHtml(row.genres)}</td>` +
       `<td class="score">${row.score}</td>`;
     resultsBody.appendChild(tr);
   }
+
+  const note = document.getElementById('hitNote');
+  note.textContent = hits === 0
+    ? ''
+    : `${hits} of these ${hits === 1 ? 'is a movie' : 'are movies'} the user really did rate — ` +
+      `in held-out test data the model was never fit on.`;
 }
 
 function starBar(rating) {

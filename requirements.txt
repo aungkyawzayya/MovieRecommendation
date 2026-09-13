@@ -1,0 +1,28 @@
+# Core project dependencies — notebooks/, core/, scripts/.
+# Versions are the ones the reported results were produced with (macOS
+# arm64, Python 3.9.6). Pinned rather than left open because the marking
+# criteria require the code to reproduce the results reported, and a
+# different scipy/sklearn can move the fourth decimal of an SVD or TF-IDF
+# figure even with every seed fixed.
+#
+# The serving layer's own dependencies are in api/requirements.txt, kept
+# separate so a deployment does not install torch just to read a JSON file.
+
+numpy==2.0.2
+pandas==2.3.3
+scipy==1.13.1
+scikit-learn==1.6.1
+
+# I-AutoRec (notebook Step 9/10, scripts/export_recommendations.py)
+torch==2.8.0
+
+# Figures
+matplotlib==3.9.4
+seaborn==0.13.2
+
+# Running notebooks/01_eda.ipynb
+jupyter==1.1.1
+notebook==7.5.7
+
+# scripts/fetch_overviews.py only (TMDB API calls)
+requests==2.32.5

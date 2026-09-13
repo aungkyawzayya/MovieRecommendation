@@ -85,9 +85,22 @@ def main():
     all_user_ids = sorted(pre.ratings["userId"].unique())
     print(f"Scoring {len(all_user_ids)} users, top {TOP_N} each...")
 
+    # exclude_seen uses the model's TRAIN+VAL mask, so a movie the user rated
+    # only in the TEST split is still a candidate — correctly, since that is
+    # exactly what held-out evaluation measures. When one of those comes back
+    # as a recommendation it is a HIT: the model never saw that rating and
+    # recommended the movie anyway. Attaching the held-out rating here lets
+    # the demo label those instead of looking like it re-recommends things
+    # the user already rated. Measured on the current export: 192 such pairs
+    # across 166 of the 610 users, all 192 from test, none from train/val.
+    held_out = {}
+    for row in ds.test_df.itertuples(index=False):
+        held_out.setdefault(int(row.userId), {})[int(row.movieId)] = float(row.rating)
+
     recommendations = {}
     for uid in all_user_ids:
         top = nested_hybrid.recommend_top_n(int(uid), n=TOP_N, exclude_seen=True)
+        user_held_out = held_out.get(int(uid), {})
         rows = []
         for rank, (movie_id, score) in enumerate(top.items(), start=1):
             meta = movie_lookup.loc[movie_id] if movie_id in movie_lookup.index else None
@@ -97,8 +110,18 @@ def main():
                 "title": str(meta["title"]) if meta is not None else f"Movie {movie_id}",
                 "genres": str(meta["genres"]) if meta is not None else "",
                 "score": round(float(score), 4),
+                # None for most rows: the user has no held-out rating for
+                # this movie, so there is nothing to confirm either way.
+                "held_out_rating": user_held_out.get(int(movie_id)),
             })
         recommendations[str(int(uid))] = rows
+
+    n_hits = sum(1 for rows in recommendations.values()
+                 for r in rows[:10] if r["held_out_rating"] is not None)
+    n_users_with_hit = sum(1 for rows in recommendations.values()
+                           if any(r["held_out_rating"] is not None for r in rows[:10]))
+    print(f"Held-out hits in the top 10: {n_hits} across {n_users_with_hit} users "
+          f"(movies the model never saw a rating for, that the user did rate)")
 
     # --- Each user's OWN top-rated movies, from the FULL ratings.csv (not
     # just train/trainval) — this is "what they actually loved", the
