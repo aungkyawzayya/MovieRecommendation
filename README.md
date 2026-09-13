@@ -186,3 +186,67 @@ layer only). Principal versions used:
 | seaborn | 0.13.2 |
 
 `venv/` is intentionally not included in the submitted archive.
+
+---
+
+## Limitations and future work
+
+These are the boundaries of what this project measured, stated so the
+results are read at the strength they actually support.
+
+### Serving
+
+- **No orchestration or refresh layer.** `data/recommendations_export.json`
+  is a static snapshot. Nothing schedules a refit, versions successive
+  exports, or detects a stale one — `/health` reports `generated_at` but no
+  consumer acts on it. The batch/serving split itself is in place; the
+  scheduler and model registry that would sit above it are out of scope.
+- **No cold-user path.** The export covers exactly the 610 users in
+  `ml-latest-small`; `/recommend/611` returns 404. This is the standing
+  trade-off of precomputation: sub-microsecond lookups, but only for users
+  scored in advance. A deployed system would need a fallback (Most-Popular
+  is the obvious one, and is already measured here as a baseline) plus a
+  path to score a genuinely new user on demand.
+
+### Data
+
+- **121 of the 9,724 rated movies still have no plot text** — 113 have no
+  synopsis on TMDB at all, and 8 carry no `tmdbId`. Coverage is 98.8%, not
+  100%, and the remainder is not fetchable.
+- **One dataset, one domain.** Everything here is MovieLens
+  `ml-latest-small`: 610 users, 100,836 ratings, 98.3% sparse. Conclusions
+  about model capacity in particular are tied to that scale — the AutoRec
+  grid showed validation RMSE improving with hidden size up to k=200, which
+  is a statement about this dataset, not about I-AutoRec in general.
+
+### Evaluation
+
+- **Offline only, and that shapes the results.** Expanding text coverage
+  from 36.4% to 98.8% tripled the content model's cold-start reach
+  (163 → 481 recommended slots) while its NDCG@10 *fell* (0.0469 → 0.0359).
+  Cold items make up only 2.92% of the relevant held-out ratings, so
+  promoting one costs a slot a popular item would more often have
+  converted. Offline ranking metrics can only credit items someone already
+  rated; they systematically penalise discovery. An online test is the only
+  way to tell whether that trade is worth making.
+- **Coverage and accuracy point at different winners.** No model here wins
+  everything: the Nested Hybrid ranks best (NDCG@10 0.1643), AutoRec has
+  the lowest rating error (RMSE 0.8517) while recommending from just 0.6%
+  of the catalogue — identical to the non-personalized baseline — and the
+  content model is the most diverse (24.9%) and the worst ranker. Reporting
+  a single "best model" would hide that.
+- **Selection noise is visible at this scale.** The nested-hybrid grid's
+  unconstrained winner was a degenerate corner (alpha1=0, alpha2=1, i.e.
+  AutoRec alone) that beat the best genuine three-model blend by 0.0006
+  NDCG on ~598 validation users — and then lost to it on test, 0.1432
+  against 0.1643. With grids this fine and a validation set this small,
+  differences in the fourth decimal should not be read as real.
+
+### Next steps
+
+1. An online or interleaved evaluation, to test whether the coverage the
+   content model buys is worth the offline ranking it costs.
+2. A cold-user path in the serving layer, with Most-Popular as the
+   documented fallback.
+3. Repeated splits (or cross-validation) for hyperparameter selection, so
+   the noise floor is estimated rather than assumed.
