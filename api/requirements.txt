@@ -1,0 +1,4 @@
+# Only needed to run the serving layer (api/main.py) — the rest of the
+# project (notebooks/, core/, scripts/) doesn't depend on either package.
+fastapi
+uvicorn
