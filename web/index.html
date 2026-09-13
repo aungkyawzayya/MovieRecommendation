@@ -23,6 +23,22 @@
   td.genres { color: #888; font-size: 0.8rem; }
   td.score { color: #555; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
   #error { color: #b00020; font-size: 0.9rem; margin-bottom: 10px; }
+
+  /* Star bar: ONE <span class="star"> per star (not one clipped 5-char
+     string) — clipping a percentage width across multiple glyphs doesn't
+     land at a reliable visual boundary (browser kerning/whitespace eats
+     the difference between e.g. 4.5/5=90% and 5/5=100%, so it silently
+     rendered every rating >=4.5 as a full 5 stars). Per-star spans make
+     "how many are filled" exact instead of approximate; only the HALF
+     star (MovieLens ratings land on X.5) needs an inner clip, and that's
+     clipping a single glyph's own box, which lines up reliably. title=""
+     carries the exact number for anyone who hovers. */
+  .stars { display: inline-flex; font-size: 0.95rem; line-height: 1; vertical-align: middle; }
+  .star { color: #ddd; }
+  .star-full { color: #e8a33d; }
+  .star-half { position: relative; display: inline-block; color: #ddd; }
+  .star-half-fill { position: absolute; top: 0; left: 0; width: 50%; overflow: hidden; color: #e8a33d; }
+  td.rating { width: 6.5em; }
 </style>
 </head>
 <body>
@@ -40,7 +56,7 @@
   <div class="column">
     <h2>What this user actually loved (their own ratings)</h2>
     <table id="profileTable">
-      <thead><tr><th>Rating</th><th>Title</th><th>Genres</th></tr></thead>
+      <thead><tr><th>Their rating</th><th>Title</th><th>Genres</th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -120,7 +136,7 @@ async function loadUser(userId) {
   for (const row of profile.top_rated) {
     const tr = document.createElement('tr');
     tr.innerHTML =
-      `<td class="score">${row.rating}★</td>` +
+      `<td class="rating">${starBar(row.rating)}</td>` +
       `<td>${escapeHtml(row.title)}</td>` +
       `<td class="genres">${escapeHtml(row.genres)}</td>`;
     profileBody.appendChild(tr);
@@ -136,6 +152,26 @@ async function loadUser(userId) {
       `<td class="score">${row.score}</td>`;
     resultsBody.appendChild(tr);
   }
+}
+
+function starBar(rating) {
+  // Snap to the nearest 0.5 (MovieLens ratings are always whole or
+  // half-star), then render an EXACT count of full/half/empty stars —
+  // see the .stars CSS comment for why per-star spans replace a single
+  // clipped 5-glyph string.
+  const rounded = Math.round(Math.max(0, Math.min(5, rating)) * 2) / 2;
+  const full = Math.floor(rounded);
+  const hasHalf = rounded - full === 0.5;
+  const empty = 5 - full - (hasHalf ? 1 : 0);
+
+  let html = `<span class="stars" title="${rating} / 5">`;
+  html += '<span class="star star-full">★</span>'.repeat(full);
+  if (hasHalf) {
+    html += '<span class="star star-half"><span class="star-half-fill">★</span>★</span>';
+  }
+  html += '<span class="star">★</span>'.repeat(empty);
+  html += '</span>';
+  return html;
 }
 
 function escapeHtml(s) {
