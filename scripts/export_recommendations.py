@@ -27,6 +27,8 @@ import json
 import time
 from pathlib import Path
 
+import pandas as pd
+
 from core.data.preprocess import MovieDataPreprocessor, STUDENT_ID
 from core.models.svd import SVDRecommender
 from core.models.content import ContentBasedRecommender
@@ -36,6 +38,12 @@ from core.models.hybrid import HybridRecommender, RawScoreAdapter
 # More than any evaluation cutoff the notebook used (Ks=[5,10,20]), so the
 # web demo can show a deeper list than was ever needed for a metric.
 TOP_N = 20
+
+# How many of a user's own highest-rated movies to export alongside their
+# recommendations — enough for the web demo to show "what this user
+# actually loved" next to "what the model recommends", so a viewer can see
+# the personalization directly instead of taking it on faith.
+PROFILE_N = 8
 
 
 def main():
@@ -92,12 +100,43 @@ def main():
             })
         recommendations[str(int(uid))] = rows
 
+    # --- Each user's OWN top-rated movies, from the FULL ratings.csv (not
+    # just train/trainval) — this is "what they actually loved", the
+    # ground truth a viewer can compare the recommendations against. Uses
+    # every rating that exists, unlike the model itself which only ever
+    # trains on train/trainval, because the point here is showing the
+    # person's real taste, not what the model was allowed to see.
+    print(f"Building each user's top {PROFILE_N} rated movies (their own taste, for comparison)...")
+    ratings_with_meta = pre.ratings.merge(pre.movies_full[["movieId", "title", "genres"]], on="movieId", how="left")
+
+    profiles = {}
+    for uid, group in ratings_with_meta.groupby("userId"):
+        # kind="mergesort": stable sort, same convention as every ranking
+        # method in core/ — ties (e.g. several 5.0s) keep dataset order
+        # rather than shuffling on every re-run.
+        top_rated = group.sort_values("rating", ascending=False, kind="mergesort").head(PROFILE_N)
+        profiles[str(int(uid))] = {
+            "n_ratings": int(len(group)),
+            "mean_rating": round(float(group["rating"].mean()), 2),
+            "top_rated": [
+                {
+                    "movieId": int(r.movieId),
+                    "title": str(r.title) if pd.notna(r.title) else f"Movie {r.movieId}",
+                    "genres": str(r.genres) if pd.notna(r.genres) else "",
+                    "rating": float(r.rating),
+                }
+                for r in top_rated.itertuples(index=False)
+            ],
+        }
+
     out = {
         "model": "Nested Hybrid (a1=0.4, a2=0.6)",
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "n_users": len(recommendations),
         "top_n_per_user": TOP_N,
+        "profile_n_per_user": PROFILE_N,
         "recommendations": recommendations,
+        "profiles": profiles,
     }
 
     out_path = Path(__file__).resolve().parents[1] / "data" / "recommendations_export.json"

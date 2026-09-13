@@ -50,6 +50,11 @@ class RecommendationService:
         self._generated_at = data["generated_at"]
         self._top_n_per_user = data["top_n_per_user"]
         self._recommendations = data["recommendations"]  # {userId_str: [rows]}
+        # {userId_str: {"n_ratings", "mean_rating", "top_rated": [rows]}} — a
+        # user's OWN highest-rated movies, from the full ratings.csv. Absent
+        # from exports written before this field existed (older
+        # recommendations_export.json on disk); .get() below handles that.
+        self._profiles = data.get("profiles", {})
 
     @property
     def model_name(self):
@@ -75,6 +80,19 @@ class RecommendationService:
         if rows is None:
             return None
         return rows[:n]
+
+    def get_profile(self, user_id: int, n: int = 8):
+        """
+        This user's own top-n highest-rated movies (real ratings, not model
+        output), or None if this user isn't in the export. Lets the web demo
+        show "what they actually loved" next to "what the model recommends" —
+        the difference between users is otherwise invisible from the
+        recommendation list alone.
+        """
+        profile = self._profiles.get(str(user_id))
+        if profile is None:
+            return None
+        return {**profile, "top_rated": profile["top_rated"][:n]}
 
 
 service = RecommendationService(EXPORT_PATH)
@@ -129,6 +147,27 @@ def recommend(user_id: int, n: int = 10):
             f"the {len(service.user_ids)} users in ml-latest-small.",
         )
     return {"userId": user_id, "model": service.model_name, "recommendations": rows}
+
+
+@app.get("/profile/{user_id}")
+def profile(user_id: int, n: int = 8):
+    """
+    This user's own top-n highest-rated movies — real ratings from
+    ratings.csv, not a model prediction. The web demo shows this beside
+    /recommend's output so the personalization is visible: two users with
+    very different tastes get very different top-10 lists, and this is the
+    real data explaining why.
+    """
+    if n < 1:
+        raise HTTPException(400, "n must be >= 1")
+    result = service.get_profile(user_id, n)
+    if result is None:
+        raise HTTPException(
+            404,
+            f"No profile for userId={user_id} — this export only covers "
+            f"the {len(service.user_ids)} users in ml-latest-small.",
+        )
+    return {"userId": user_id, **result}
 
 
 # Serves web/index.html at "/" — same-origin, so the page's fetch("/recommend/...")

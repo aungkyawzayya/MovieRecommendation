@@ -5,20 +5,24 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Movie Recommendations</title>
 <style>
-  body { font-family: system-ui, -apple-system, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; color: #1a1a1a; }
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 920px; margin: 40px auto; padding: 0 16px; color: #1a1a1a; }
   h1 { font-size: 1.35rem; margin-bottom: 4px; }
+  h2 { font-size: 0.95rem; margin: 0 0 10px; color: #444; }
   #status { color: #777; font-size: 0.88rem; margin-bottom: 20px; }
-  .row { display: flex; gap: 8px; align-items: center; margin-bottom: 20px; flex-wrap: wrap; }
+  .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
   select, button { font-size: 0.95rem; padding: 7px 12px; border-radius: 6px; border: 1px solid #ccc; }
   button { background: #222; color: #fff; border: none; cursor: pointer; }
   button:hover { background: #444; }
+  #userMeta { color: #888; font-size: 0.85rem; margin-bottom: 20px; min-height: 1.2em; }
+  .columns { display: flex; gap: 28px; flex-wrap: wrap; }
+  .column { flex: 1 1 380px; min-width: 0; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid #eee; font-size: 0.9rem; }
-  th { color: #666; font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; }
-  td.rank { color: #999; width: 28px; }
-  td.genres { color: #888; font-size: 0.82rem; }
-  td.score { color: #555; font-variant-numeric: tabular-nums; text-align: right; }
-  #error { color: #b00020; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid #eee; font-size: 0.88rem; }
+  th { color: #666; font-weight: 600; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; }
+  td.rank { color: #999; width: 24px; }
+  td.genres { color: #888; font-size: 0.8rem; }
+  td.score { color: #555; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  #error { color: #b00020; font-size: 0.9rem; margin-bottom: 10px; }
 </style>
 </head>
 <body>
@@ -27,13 +31,27 @@
 <div class="row">
   <label for="userSelect">User:</label>
   <select id="userSelect"></select>
-  <button id="goBtn">Get recommendations</button>
+  <button id="goBtn">Refresh</button>
 </div>
+<div id="userMeta"></div>
 <div id="error"></div>
-<table id="results">
-  <thead><tr><th></th><th>Title</th><th>Genres</th><th>Score</th></tr></thead>
-  <tbody></tbody>
-</table>
+
+<div class="columns">
+  <div class="column">
+    <h2>What this user actually loved (their own ratings)</h2>
+    <table id="profileTable">
+      <thead><tr><th>Rating</th><th>Title</th><th>Genres</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="column">
+    <h2>Recommended for them (Nested Hybrid model)</h2>
+    <table id="resultsTable">
+      <thead><tr><th></th><th>Title</th><th>Genres</th><th>Score</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
 
 <script>
 async function init() {
@@ -50,39 +68,73 @@ async function init() {
       opt.textContent = `User ${uid}`;
       select.appendChild(opt);
     }
-    document.getElementById('goBtn').addEventListener('click', () => loadRecs(select.value));
-    if (user_ids.length > 0) loadRecs(select.value);
+    // Changing the dropdown loads the new user immediately (clearing the
+    // old tables first, in loadUser below) — no need to also press the
+    // button. The button stays as an explicit re-fetch (e.g. after the
+    // export file has been regenerated with new data).
+    select.addEventListener('change', () => loadUser(select.value));
+    document.getElementById('goBtn').addEventListener('click', () => loadUser(select.value));
+    if (user_ids.length > 0) loadUser(select.value);
   } catch (err) {
     document.getElementById('status').textContent = 'Could not reach the API.';
     document.getElementById('error').textContent = String(err);
   }
 }
 
-async function loadRecs(userId) {
-  const tbody = document.querySelector('#results tbody');
+async function loadUser(userId) {
   const errorEl = document.getElementById('error');
+  const metaEl = document.getElementById('userMeta');
+  const profileBody = document.querySelector('#profileTable tbody');
+  const resultsBody = document.querySelector('#resultsTable tbody');
+
+  // Clear EVERYTHING from the previous user first, before either request
+  // resolves — without this, switching from a user with 8 profile rows to
+  // one with fewer would leave stale rows sitting under the new (shorter)
+  // list, silently mixing two users' data on screen.
   errorEl.textContent = '';
-  tbody.innerHTML = '<tr><td colspan="4">Loading…</td></tr>';
-  try {
-    const res = await fetch(`/recommend/${userId}?n=10`);
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.detail || `HTTP ${res.status}`);
-    }
-    const data = await res.json();
-    tbody.innerHTML = '';
-    for (const row of data.recommendations) {
-      const tr = document.createElement('tr');
-      tr.innerHTML =
-        `<td class="rank">${row.rank}</td>` +
-        `<td>${escapeHtml(row.title)}</td>` +
-        `<td class="genres">${escapeHtml(row.genres)}</td>` +
-        `<td class="score">${row.score}</td>`;
-      tbody.appendChild(tr);
-    }
-  } catch (err) {
-    tbody.innerHTML = '';
-    errorEl.textContent = String(err.message || err);
+  metaEl.textContent = '';
+  profileBody.innerHTML = '<tr><td colspan="3">Loading…</td></tr>';
+  resultsBody.innerHTML = '<tr><td colspan="4">Loading…</td></tr>';
+
+  const [profileRes, recRes] = await Promise.all([
+    fetch(`/profile/${userId}?n=8`),
+    fetch(`/recommend/${userId}?n=10`),
+  ]);
+
+  if (!profileRes.ok || !recRes.ok) {
+    const failed = !profileRes.ok ? profileRes : recRes;
+    const body = await failed.json().catch(() => ({}));
+    errorEl.textContent = body.detail || `HTTP ${failed.status}`;
+    profileBody.innerHTML = '';
+    resultsBody.innerHTML = '';
+    return;
+  }
+
+  const profile = await profileRes.json();
+  const rec = await recRes.json();
+
+  metaEl.textContent =
+    `${profile.n_ratings} ratings on record, average ${profile.mean_rating} stars`;
+
+  profileBody.innerHTML = '';
+  for (const row of profile.top_rated) {
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      `<td class="score">${row.rating}★</td>` +
+      `<td>${escapeHtml(row.title)}</td>` +
+      `<td class="genres">${escapeHtml(row.genres)}</td>`;
+    profileBody.appendChild(tr);
+  }
+
+  resultsBody.innerHTML = '';
+  for (const row of rec.recommendations) {
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      `<td class="rank">${row.rank}</td>` +
+      `<td>${escapeHtml(row.title)}</td>` +
+      `<td class="genres">${escapeHtml(row.genres)}</td>` +
+      `<td class="score">${row.score}</td>`;
+    resultsBody.appendChild(tr);
   }
 }
 
