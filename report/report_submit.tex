@@ -81,7 +81,7 @@ beat the popularity baseline does not. That paired difference is $+0.0012$
 NDCG@10 and changes sign twice, so collaborative filtering alone is better
 described as indistinguishable from recommending best-sellers than as worse
 than it. The weighted hybrids, by contrast, beat plain SVD on every split by
-$+0.0103 \pm 0.0019$.
+$+0.0103 \pm 0.0022$.
 \end{abstract}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -544,12 +544,12 @@ Four ablations were run; Appendix~\ref{app:grids} gives the grids.
 \toprule
 Ordering & $|$diff$|$ & std & Holds \\
 \midrule
-Nested $>$ Hybrid (wtd)   & 0.0035 & 0.0007 & 4/4 \\
-Hybrid (wtd) $>$ SVD      & 0.0103 & 0.0019 & 4/4 \\
-Nested $>$ Most-Popular   & 0.0150 & 0.0066 & 4/4 \\
-Most-Popular $>$ AutoRec  & 0.0073 & 0.0043 & 4/4 \\
-SVD $>$ Hybrid (switch)   & 0.0025 & 0.0005 & 4/4 \\
-SVD vs.\ Most-Popular     & 0.0012 & 0.0052 & \textbf{sign flips} \\
+Nested $>$ Hybrid (wtd)   & 0.0035 & 0.0008 & 4/4 \\
+Hybrid (wtd) $>$ SVD      & 0.0103 & 0.0022 & 4/4 \\
+Nested $>$ Most-Popular   & 0.0150 & 0.0076 & 4/4 \\
+Most-Popular $>$ AutoRec  & 0.0073 & 0.0050 & 4/4 \\
+SVD $>$ Hybrid (switch)   & 0.0025 & 0.0006 & 4/4 \\
+SVD vs.\ Most-Popular     & 0.0012 & 0.0060 & \textbf{sign flips} \\
 \bottomrule
 \end{tabular}
 \caption{Head-to-head NDCG@10 orderings, differenced within each of four
@@ -566,7 +566,7 @@ split cannot be called separable from that split alone.
 
 Comparing pairwise within each split is the sharper test, because all seven
 systems share the split and a generous split lifts them together; differencing
-cancels that shared movement. Table~\ref{tab:robust} reports the result.
+cancels that shared movement. Table~\ref{tab:robust} reports the result; every standard deviation in this paper is the sample standard deviation ($n-1$).
 
 Eight of ten claims tested hold on all four splits. The exception is the SVD
 comparison from Section~\ref{sec:ranking}. On the reported split SVD loses to
@@ -577,7 +577,7 @@ best-sellers but that it cannot be distinguished from it --- which motivates
 the hybrid just as strongly, and is a claim the evidence actually supports.
 
 The hybrid's own advantage is unaffected: the weighted hybrids beat plain SVD
-on every split by $+0.0103 \pm 0.0019$. The beyond-accuracy findings are
+on every split by $+0.0103 \pm 0.0022$. The beyond-accuracy findings are
 considerably more stable than the ranking ones --- the content model's
 coverage is $24.9\% \pm 0.2\%$ and its novelty $6.74 \pm 0.03$ across all four
 splits --- and the zero-variance cold-item result holds exactly, as the
@@ -601,7 +601,7 @@ already rated and therefore penalise discovery systematically; this is a
 limitation of the evaluation, not a regression in the model.
 
 Third, the switching hybrid ranks consistently below plain SVD, by
-$0.0025 \pm 0.0005$ across four splits, while reaching 60 cold-start slots
+$0.0025 \pm 0.0006$ across four splits, while reaching 60 cold-start slots
 against SVD's zero. That single pair contains the accuracy/coverage trade-off
 in both directions, and both directions are separable.
 

@@ -45,3 +45,20 @@ so there are no `\cite` commands to keep in sync.
 **Verify every entry before submitting.** The DOIs for Adomavicius & Kwon,
 Burke, Cremonesi et al. and Sedhain et al. were checked against publisher
 listings; the other seven were not.
+
+## report.docx
+
+An editable Word copy of exactly the same content, produced with
+`pandoc report.tex -o report.docx`. Use it to draft wording; the submission
+PDF still comes from `report.tex`.
+
+Two things it does not carry over:
+
+- **Layout.** Word renders it single-column, so it runs to 16 pages. That
+  says nothing about the submission, which is 9 in the two-column template.
+- **Cross-references.** `\ref{app:grids}` becomes "Appendix 8" rather than
+  "Appendix B". Ignore it in the Word file, or fix by hand if you decide to
+  submit from Word rather than LaTeX.
+
+If you edit wording in `report.docx`, copy the change back into `report.tex` —
+the two do not sync themselves.
