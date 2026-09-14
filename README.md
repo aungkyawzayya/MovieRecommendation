@@ -31,9 +31,14 @@ would score.
 
 Two findings worth stating up front, because they shaped the project:
 
-- **SVD alone does not beat a non-personalized Most-Popular baseline on
-  ranking** (0/3 cutoffs), even though it clearly beats the user-mean
-  baseline on RMSE. Only the hybrids beat Most-Popular on ranking.
+- **SVD alone is not reliably better than a non-personalized Most-Popular
+  baseline on ranking**, even though it clearly beats the user-mean baseline
+  on RMSE. On the reported split SVD loses at all 3 cutoffs; across four
+  splits the gap averages +0.0012 NDCG@10 and **changes sign twice**
+  (`scripts/seed_stability.py`), so the honest claim is that collaborative
+  filtering alone cannot be separated from recommending best-sellers — not
+  that it is strictly worse. The weighted hybrids, by contrast, beat plain
+  SVD on every split (+0.0103 ± 0.0019).
 - **AutoRec achieves near-CF ranking quality by collapsing onto
   popularity** — its catalogue coverage (0.6%) is identical to the naive
   baseline's, and Step 13's novelty measure sharpens that from "as narrow as"
@@ -156,6 +161,7 @@ was never fit on.
 |---|---|
 | `export_recommendations.py` | Batch-score the deployed model to JSON (step 2 above) |
 | `fetch_overviews.py` | Fetch TMDB plot overviews. Needs `TMDB_API_KEY` in the environment. Raised text coverage from 36.4% to 98.8% of the rated catalogue |
+| `seed_stability.py` | Re-run the seven-model comparison across four splits and report which claims survive all of them (~80s) |
 
 `fetch_overviews.py` only needs re-running to rebuild
 `data/overview_plot.csv` from scratch; the file it produces is already
@@ -269,6 +275,37 @@ results are read at the strength they actually support.
   most serendipitous (0.0900); the content model is the most diverse (24.9%),
   the most novel (6.76), reaches the most cold items (481) and is the worst
   ranker (0.0359). Reporting a single "best model" would hide all of it.
+- **The noise floor is measured, not assumed.**
+  `scripts/seed_stability.py` re-runs the whole seven-model comparison on four
+  different 60/20/20 splits (the student-ID seed plus 1, 42 and 12345, fixed
+  in advance). Any single model's NDCG@10 moves by up to **0.0123** between
+  splits, so two models closer together than that on one split cannot be
+  called separable from that split alone.
+
+  Comparing *pairwise within each split* is the sharper test, because all
+  seven models share the split and a generous split lifts them together —
+  differencing cancels that shared movement. On that test:
+
+  | Ordering | mean diff | std | Verdict |
+  |---|---|---|---|
+  | Nested Hybrid > Hybrid (weighted) | 0.0035 | 0.0007 | holds on 4/4 |
+  | Hybrid (weighted) > SVD | 0.0103 | 0.0019 | holds on 4/4 |
+  | Nested Hybrid > Most-Popular | 0.0150 | 0.0066 | holds on 4/4 |
+  | Most-Popular > AutoRec | 0.0073 | 0.0043 | holds on 4/4 |
+  | SVD > Hybrid (switching) | 0.0025 | 0.0005 | holds on 4/4 |
+  | SVD vs Most-Popular | 0.0012 | 0.0052 | **sign flips — not separable** |
+
+  Two things follow. The switching hybrid *consistently* ranks below plain
+  SVD while reaching 60 cold-start slots to SVD's 0 — the accuracy/coverage
+  trade-off in a single pair, separable in both directions. And the coverage
+  and novelty findings are far more stable than the ranking ones: Content's
+  coverage is 24.9% ± 0.2% and its novelty 6.74 ± 0.03 across all four
+  splits, while AutoRec's zero-variance predictions on cold items hold
+  exactly, as the mathematics requires.
+
+  Caveat: hyperparameters are held at the values selected on the student-ID
+  validation split, so this measures split variance with the model fixed, not
+  selection variance as well.
 - **Selection noise is visible at this scale.** The nested-hybrid grid's
   unconstrained winner was a degenerate corner (alpha1=0, alpha2=1, i.e.
   AutoRec alone) that beat the best genuine three-model blend by 0.0006
@@ -287,8 +324,12 @@ results are read at the strength they actually support.
    user's first few interactions and push it through the existing hybrid
    with the collaborative weight pinned to zero — reusing the components
    already built and measured here, rather than adding a model.
-3. Repeated splits (or cross-validation) for hyperparameter selection, so
-   the noise floor is estimated rather than assumed.
+3. Repeated splits for *hyperparameter selection*, not just for reporting.
+   `scripts/seed_stability.py` now measures how far the final comparison
+   moves across splits, but the hyperparameters themselves are still chosen
+   on one validation set; re-running the grids per split would capture
+   selection variance too, and would remove the mild optimism that comes
+   from having chosen them on data that lands in another split's test set.
 4. Feeding content features into the deep model itself rather than blending
    them afterwards — a two-tower design, or injecting the text cosine
    similarities as extra inputs to AutoRec's hidden layer. The cold items
