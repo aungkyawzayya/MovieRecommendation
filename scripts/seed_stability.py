@@ -359,7 +359,12 @@ def main():
             label, verdict = f"{b} > {a}", "separable"
         else:
             label, verdict = f"{a} vs {b}", "NOT separable - sign flips"
-        print(f"  {label:47s} {abs(diffs.mean()):8.4f} {diffs.std():8.4f}  {verdict}")
+        # ddof=1 (sample std, /n-1) to match every other std this script
+        # reports (the per-model spread above, and the coverage/novelty/RMSE
+        # mean+-std later) - a bare .std() on this numpy array defaults to
+        # ddof=0 (population std, /n), which silently used a DIFFERENT
+        # convention for the same n=4 sample and is a bug, not a choice.
+        print(f"  {label:47s} {abs(diffs.mean()):8.4f} {diffs.std(ddof=1):8.4f}  {verdict}")
     print("\n  'separable' = the ordering is the same on all four splits, so it can")
     print("  be reported as a result. A pair whose sign flips must not be, however")
     print("  large the gap looks on the student-ID split alone.")
