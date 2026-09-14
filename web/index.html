@@ -49,6 +49,19 @@
          white-space: nowrap; vertical-align: middle; }
   tr.hit-row td { background: #fafdfb; }
   #hitNote { color: #1f6b38; font-size: 0.82rem; margin-top: 8px; min-height: 1.1em; }
+
+  /* Cold-start fallback: this list is NOT from the hybrid model, it is the
+     non-personalized Most-Popular baseline served because the batch job never
+     scored this user. Amber, not red — the system is working as designed, but
+     the viewer must not mistake these rows for a personalized result. */
+  #fallbackNote { background: #fff6e5; border: 1px solid #f0d9a8; color: #7a5a12;
+                  padding: 9px 11px; border-radius: 6px; font-size: 0.82rem;
+                  margin-bottom: 10px; display: none; }
+  #fallbackNote.show { display: block; }
+  #fallbackNote b { color: #5c4409; }
+  input[type=number] { font-size: 0.95rem; padding: 7px 10px; border-radius: 6px;
+                       border: 1px solid #ccc; width: 11em; }
+  .hint { color: #999; font-size: 0.8rem; }
 </style>
 </head>
 <body>
@@ -57,6 +70,9 @@
 <div class="row">
   <label for="userSelect">User:</label>
   <select id="userSelect"></select>
+  <span class="hint">or</span>
+  <input id="userInput" type="number" min="1" placeholder="any id, e.g. 611">
+  <span class="hint">an id the batch job never scored</span>
 </div>
 <div id="userMeta"></div>
 <div id="error"></div>
@@ -74,8 +90,9 @@
       <h2 style="margin:0">Recommended for them (Nested Hybrid model)</h2>
       <button id="recommendBtn">Recommend</button>
     </div>
+    <div id="fallbackNote"></div>
     <table id="resultsTable">
-      <thead><tr><th></th><th>Title</th><th>Genres</th><th>Score</th></tr></thead>
+      <thead><tr><th></th><th>Title</th><th>Genres</th><th id="scoreHeader">Score</th></tr></thead>
       <tbody></tbody>
     </table>
     <div id="hitNote"></div>
@@ -105,11 +122,22 @@ async function init() {
     // user") instead of happening silently, and it means switching users
     // can never leave one user's ratings sitting next to a DIFFERENT
     // user's stale recommendations — see resetRecommendations() below.
+    const input = document.getElementById('userInput');
     select.addEventListener('change', () => {
+      input.value = '';            // the dropdown wins once it is touched
       loadProfile(select.value);
       resetRecommendations();
     });
-    document.getElementById('recommendBtn').addEventListener('click', () => runRecommend(select.value));
+    // Typing an id only clears the stale result; it does not fetch anything.
+    // Same reasoning as the dropdown: the RIGHT column is an explicit action.
+    input.addEventListener('input', resetRecommendations);
+    // Pressing Enter after typing an id is the expected way to submit a text
+    // box — without this, Enter does nothing and the box looks stuck. type=
+    // "number" still fires a normal keydown for Enter, so this is safe.
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') runRecommend(currentUserId());
+    });
+    document.getElementById('recommendBtn').addEventListener('click', () => runRecommend(currentUserId()));
     resetRecommendations();
     if (user_ids.length > 0) loadProfile(select.value);
   } catch (err) {
@@ -118,8 +146,22 @@ async function init() {
   }
 }
 
+// The typed box takes precedence when it has a value, so an id that is not in
+// the dropdown at all can still be requested — which is the only way to reach
+// the cold-start path from the UI.
+function currentUserId() {
+  const typed = document.getElementById('userInput').value.trim();
+  return typed !== '' ? typed : document.getElementById('userSelect').value;
+}
+
+let loadedProfileId = null;   // which user the LEFT column is currently showing
+
 function resetRecommendations() {
   document.getElementById('hitNote').textContent = '';
+  const fb = document.getElementById('fallbackNote');
+  fb.className = '';
+  fb.textContent = '';
+  document.getElementById('scoreHeader').textContent = 'Score';
   document.querySelector('#resultsTable tbody').innerHTML =
     '<tr><td colspan="4" style="color:#999">Click "Recommend" to generate suggestions for this user.</td></tr>';
 }
@@ -135,13 +177,25 @@ async function loadProfile(userId) {
 
   const res = await fetch(`/profile/${userId}?n=8`);
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    errorEl.textContent = body.detail || `HTTP ${res.status}`;
-    profileBody.innerHTML = '';
+    // 404 here is the expected, correct answer for a user the system has never
+    // seen: they genuinely have no ratings. That is not an error to show in
+    // red — it is the whole point of the cold-start demonstration.
+    loadedProfileId = String(userId);
+    if (res.status === 404) {
+      metaEl.textContent = 'No rating history on file — this is a new user.';
+      profileBody.innerHTML =
+        '<tr><td colspan="3" style="color:#999">Nothing to show: the system has ' +
+        'never seen a rating from this user.</td></tr>';
+    } else {
+      const body = await res.json().catch(() => ({}));
+      errorEl.textContent = body.detail || `HTTP ${res.status}`;
+      profileBody.innerHTML = '';
+    }
     return;
   }
 
   const profile = await res.json();
+  loadedProfileId = String(userId);
   metaEl.textContent =
     `${profile.n_ratings} ratings on record, average ${profile.mean_rating} stars`;
 
@@ -160,6 +214,12 @@ async function runRecommend(userId) {
   const errorEl = document.getElementById('error');
   const resultsBody = document.querySelector('#resultsTable tbody');
 
+  // Recommending for a typed id while the left column still shows whoever was
+  // last selected would put two different users side by side. Reload it first.
+  if (String(userId) !== String(loadedProfileId)) {
+    await loadProfile(userId);
+  }
+
   errorEl.textContent = '';
   resultsBody.innerHTML = '<tr><td colspan="4">Loading…</td></tr>';
 
@@ -173,6 +233,20 @@ async function runRecommend(userId) {
 
   const rec = await res.json();
   resultsBody.innerHTML = '';
+
+  // is_fallback means the batch job never scored this user, so what came back
+  // is the Most-Popular baseline, not the hybrid. The 'score' column is then a
+  // train+val rating COUNT rather than a model score, so the header changes too.
+  if (rec.is_fallback) {
+    const fb = document.getElementById('fallbackNote');
+    fb.className = 'show';
+    fb.innerHTML =
+      `<b>Cold-start fallback — not a personalized result.</b><br>` +
+      escapeHtml(rec.fallback_reason || '') +
+      `<br>Serving: ${escapeHtml(rec.model)}.`;
+    document.getElementById('scoreHeader').textContent = 'Ratings';
+  }
+
   let hits = 0;
   for (const row of rec.recommendations) {
     // held_out_rating is set only when this user rated this movie in the

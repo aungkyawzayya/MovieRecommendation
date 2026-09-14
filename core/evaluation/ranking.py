@@ -180,3 +180,164 @@ def evaluate_ranking_at_ks(recommend_fn, relevant_by_user, ks):
         }
         for k, a in acc.items()
     }
+
+
+class PopularityProfile:
+    """
+    The item popularity distribution, wrapped so the beyond-accuracy metrics
+    below can be computed without re-deriving counts on every call.
+
+    A class rather than loose functions because all of these metrics share
+    exactly one piece of state - how often each item was rated - and it is
+    derived once then read tens of thousands of times (7 models x 610 users
+    x 10 slots). C# analogy: an immutable value object built in the
+    constructor, instead of every method taking the same `popularity` Series
+    as its first argument and recomputing the same logs.
+
+    WHY THIS EXISTS AT ALL: catalogue coverage answers "how many DIFFERENT
+    items did this model ever recommend", which is a blunt count - it scores
+    recommending the 3rd-most-rated film and recommending an unrated obscurity
+    as the same event. Two models can both cover 5% of the catalogue while one
+    reaches the 500 most-rated titles and the other reaches 500 nobody has
+    heard of. Novelty and serendipity weight each recommended SLOT by how
+    rarely that item was rated, so a model that looks diverse by coverage but
+    only ever lands on best-sellers scores low.
+    """
+
+    def __init__(self, popularity, n_users):
+        """
+        popularity: Series indexed by movieId, values = how many ratings the
+                    item received in the TRAINING data (train+val here - the
+                    same `popularity` Series Step 6 builds).
+        n_users:    how many users those counts were taken over, so a raw
+                    count can be read as an observation probability.
+        """
+        self._counts = popularity
+        self._n_users = int(n_users)
+
+        # Laplace (add-one) smoothing, and it is load-bearing here, not
+        # cosmetic: 732 items have ZERO train+val ratings and the content
+        # model puts 481 of them into top-10s. With p=0 those items score
+        # -log2(0) = inf, and every mean containing one comes out inf, so the
+        # metric would be undefined for exactly the models it is meant to
+        # reward. Add-one gives them the highest FINITE novelty instead,
+        # which is the honest reading - they are the most obscure things in
+        # the catalogue, not undefined.
+        self._probability = (popularity + 1.0) / (self._n_users + 1.0)
+        self._self_information = -np.log2(self._probability)
+
+    @property
+    def n_users(self):
+        return self._n_users
+
+    @property
+    def n_items(self):
+        return len(self._counts)
+
+    @property
+    def max_novelty(self):
+        """
+        Novelty of an item nobody rated - the ceiling of the scale, and the
+        value an unknown movieId falls back to. Reported alongside the means
+        so a novelty of 7.9 can be read as "close to the 9.3 ceiling" rather
+        than as a bare number on an unstated scale.
+        """
+        return float(-np.log2(1.0 / (self._n_users + 1.0)))
+
+    @property
+    def mean_catalogue_novelty(self):
+        """
+        Novelty averaged over every item in the catalogue, each counted once.
+        This is the reference line: a recommender that picked items uniformly
+        at random would score about this. Anything below it is more
+        popularity-biased than chance.
+        """
+        return float(self._self_information.mean())
+
+    def novelty(self, item_id):
+        """
+        Self-information of one item: -log2(P(the item was rated)). Higher
+        means more obscure. An item rated by half the users scores 1.0; one
+        rated by nobody scores max_novelty (~9.3 at 610 users).
+        """
+        return float(self._self_information.get(item_id, self.max_novelty))
+
+    def unexpectedness(self, item_id):
+        """
+        1 - P(the item was rated), in [0, 1]. This is the serendipity
+        discount: a hit on a film 80% of users have rated is worth 0.2 of a
+        hit on one nobody has seen.
+
+        Linear rather than logarithmic on purpose. Novelty uses the log
+        because it is measuring information; serendipity needs a BOUNDED
+        weight so Serendipity@k stays on the same 0-1 scale as Precision@k
+        and the two can be read side by side.
+        """
+        return float(1.0 - self._probability.get(item_id, 0.0))
+
+
+def evaluate_beyond_accuracy(recommend_fn, popularity_profile, user_ids,
+                             relevant_by_user=None, k=10):
+    """
+    Novelty@k and (optionally) Serendipity@k for one recommender.
+
+    Novelty@k       mean self-information of the recommended items, averaged
+                    over every user in `user_ids`. Needs no ground truth - it
+                    is a property of the LIST - so it is measured over all
+                    users, the same population catalogue coverage uses.
+
+    Serendipity@k   Precision@k with every hit weighted by how unexpected that
+                    item was:  (1/k) * sum over top-k of  rel(i) * (1 - P(i)).
+                    Needs ground truth, so it can only be averaged over users
+                    who HAVE a relevant held-out item - a strictly smaller
+                    population.
+
+    Those two populations differ (610 vs ~600 here), which is why the returned
+    dict reports n_novelty and n_serendipity separately instead of one
+    "n_users" covering both - same reason evaluate_ranking() reports
+    n_precision/n_recall/n_ndcg apart.
+
+    recommend_fn: user_id -> ranked list of movieIds, same contract as
+                  evaluate_ranking(). Passing `lambda uid: precomputed[uid]`
+                  is fine and is what the notebook does, so each model's
+                  lists are built once and reused by every metric.
+
+    Because Serendipity@k shares Precision@k's denominator and scale, the
+    ratio Serendipity/Precision reads directly as "what fraction of this
+    model's accuracy came from something other than best-sellers".
+    """
+    novelties = []
+    serendipities = []
+
+    for user_id in user_ids:
+        rec_ids = recommend_fn(user_id)
+        if not rec_ids:
+            continue
+        top_k = rec_ids[:k]
+        if not top_k:
+            continue
+
+        # Averaged over the slots actually FILLED, not over k: an empty slot
+        # has no item and therefore no popularity, and scoring it as zero
+        # novelty would charge a short list twice - precision_at_k() already
+        # charges it once for the gap.
+        novelties.append(float(np.mean([popularity_profile.novelty(m) for m in top_k])))
+
+        if relevant_by_user is None:
+            continue
+        relevant = relevant_by_user.get(user_id)
+        if not relevant:
+            continue
+        # Divided by k, matching precision_at_k()'s denominator, so the two
+        # sit on one scale and unfilled slots do count against the model.
+        gain = sum(popularity_profile.unexpectedness(m) for m in top_k if m in relevant)
+        serendipities.append(gain / k)
+
+    return {
+        f"Novelty@{k}": float(np.mean(novelties)) if novelties else None,
+        f"Serendipity@{k}": float(np.mean(serendipities)) if serendipities else None,
+        "n_novelty": len(novelties),
+        "n_serendipity": len(serendipities),
+        "max_novelty": popularity_profile.max_novelty,
+        "catalogue_novelty": popularity_profile.mean_catalogue_novelty,
+    }

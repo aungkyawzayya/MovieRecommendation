@@ -11,19 +11,23 @@ Seven models are built and compared on the same held-out test split, on
 both rating-error and ranking metrics, plus coverage and popularity-bias
 measures. The headline result is that no single model wins everything:
 
-| Model | Test NDCG@10 | Test RMSE | Catalogue coverage | Cold-start reach |
-|---|---|---|---|---|
-| User-mean baseline | — | 0.9448 | — | — |
-| Most-Popular (no personalization) | 0.1549 | — | 0.6% | 0 |
-| SVD (collaborative filtering) | 0.1502 | 0.8734 | 4.0% | 0 |
-| Content-based (TF-IDF) | 0.0359 | — | **24.9%** | **481** |
-| AutoRec (I-AutoRec) | 0.1432 | **0.8517** | 0.6% | 0 |
-| Hybrid (SVD + Content, α=0.5) | 0.1605 | — | 5.5% | 6 |
-| Hybrid (switching) | 0.1474 | — | 4.2% | 60 |
-| **Nested Hybrid (SVD + AutoRec + Content)** | **0.1643** | — | 5.1% | 1 |
+| Model | Test NDCG@10 | Test RMSE | Catalogue coverage | Novelty@10 | Cold-start reach |
+|---|---|---|---|---|---|
+| User-mean baseline | — | 0.9448 | — | — | — |
+| Most-Popular (no personalization) | 0.1549 | — | 0.6% | 1.65 | 0 |
+| SVD (collaborative filtering) | 0.1502 | 0.8734 | 4.0% | 2.34 | 0 |
+| Content-based (TF-IDF) | 0.0359 | — | **24.9%** | **6.76** | **481** |
+| AutoRec (I-AutoRec) | 0.1432 | **0.8517** | 0.6% | 1.86 | 0 |
+| Hybrid (SVD + Content, α=0.5) | 0.1605 | — | 5.5% | 2.49 | 6 |
+| Hybrid (switching) | 0.1474 | — | 4.2% | 2.40 | 60 |
+| **Nested Hybrid (SVD + AutoRec + Content)** | **0.1643** | — | 5.1% | 2.42 | 1 |
 
 Cold-start reach counts items with zero train+val ratings appearing in a
-top-10, summed over 6,100 recommended slots.
+top-10, summed over 6,100 recommended slots. Novelty@10 is mean
+`-log2 P(item was rated)`: **1.19** for the single most-rated film, **7.13**
+for a uniformly random recommender, **9.26** for an item nobody rated. Six of
+the seven models sit between 1.65 and 2.49 — far below what picking at random
+would score.
 
 Two findings worth stating up front, because they shaped the project:
 
@@ -32,8 +36,11 @@ Two findings worth stating up front, because they shaped the project:
   baseline on RMSE. Only the hybrids beat Most-Popular on ranking.
 - **AutoRec achieves near-CF ranking quality by collapsing onto
   popularity** — its catalogue coverage (0.6%) is identical to the naive
-  baseline's. Ranking metrics alone hide this; it is visible only because
-  coverage was measured alongside them.
+  baseline's, and Step 13's novelty measure sharpens that from "as narrow as"
+  to "at the same end of the distribution": AutoRec scores 1.86 against
+  Most-Popular's 1.65, on a scale where a random recommender scores 7.13. Its
+  low RMSE is bought by predicting well on films almost everyone has already
+  rated. Ranking metrics alone hide this entirely.
 
 ---
 
@@ -124,13 +131,17 @@ Then open <http://127.0.0.1:8000/>.
 | `GET /` | The demo page |
 | `GET /health` | Model name, generation time, user count |
 | `GET /users` | All available userIds |
-| `GET /recommend/{user_id}?n=10` | Top-n recommendations |
+| `GET /recommend/{user_id}?n=10` | Top-n recommendations. An unknown userId returns 200 with `is_fallback: true` and the Most-Popular baseline, not 404 |
 | `GET /profile/{user_id}?n=8` | That user's own highest-rated movies |
 
 The serving process never imports PyTorch or scikit-learn — it only reads
 the JSON that step 2 wrote. That split is deliberate: batch job fits and
 predicts, serving tier is a thin, fast reader with no training framework
 in the request path.
+
+The demo page also takes a free-text userId, so entering one the batch job
+never scored (611, say) shows the cold-start fallback and the banner
+explaining what is being served and why.
 
 The demo shows each user's own top-rated movies beside the model's
 recommendations. Where a recommended movie carries a "they rated this ★"
@@ -201,12 +212,18 @@ results are read at the strength they actually support.
   exports, or detects a stale one — `/health` reports `generated_at` but no
   consumer acts on it. The batch/serving split itself is in place; the
   scheduler and model registry that would sit above it are out of scope.
-- **No cold-user path.** The export covers exactly the 610 users in
-  `ml-latest-small`; `/recommend/611` returns 404. This is the standing
-  trade-off of precomputation: sub-microsecond lookups, but only for users
-  scored in advance. A deployed system would need a fallback (Most-Popular
-  is the obvious one, and is already measured here as a baseline) plus a
-  path to score a genuinely new user on demand.
+- **Cold users get the baseline, not personalization.** The export covers
+  exactly the 610 users in `ml-latest-small`. `/recommend/611` no longer
+  returns 404 — it returns 200 with `is_fallback: true` and the
+  non-personalized Most-Popular list, which is the *same* baseline the
+  seven-model comparison measures, so the fallback's quality is a reported
+  number (test NDCG@10 0.1549) rather than an unquantified guess. What is
+  still missing is the other half: nothing scores a genuinely new user on
+  demand, so that user stays on the baseline until the next batch run. The
+  route that would close this gap — a near-line service building a TF-IDF
+  profile from a new user's first few interactions and blending it through
+  the existing z-score machinery with the collaborative weight pinned to
+  zero — is sketched in "Next steps" below, not implemented.
 
 ### Data
 
@@ -229,12 +246,29 @@ results are read at the strength they actually support.
   converted. Offline ranking metrics can only credit items someone already
   rated; they systematically penalise discovery. An online test is the only
   way to tell whether that trade is worth making.
-- **Coverage and accuracy point at different winners.** No model here wins
-  everything: the Nested Hybrid ranks best (NDCG@10 0.1643), AutoRec has
-  the lowest rating error (RMSE 0.8517) while recommending from just 0.6%
-  of the catalogue — identical to the non-personalized baseline — and the
-  content model is the most diverse (24.9%) and the worst ranker. Reporting
-  a single "best model" would hide that.
+- **Coverage is a blunt instrument, so novelty is measured too.** Catalogue
+  coverage counts how many *different* items a model reached; it scores
+  recommending the 3rd-most-rated film and an unrated obscurity identically.
+  Step 13 adds Novelty@10 (mean `-log2 P(item was rated)`) and Serendipity@10
+  (Precision@10 discounted by item popularity) so "reached wide" and "reached
+  *deep* into the tail" stop being the same claim. Both are reported against
+  two reference lines — the novelty a uniformly random recommender would score,
+  and the ceiling an unrated item scores — so the numbers read on a stated
+  scale instead of as bare figures. Measured: the content model scores 6.76,
+  every other model 1.65–2.49, against a random-recommender line of 7.13. The
+  six accuracy-oriented models are not merely *somewhat* popularity-biased;
+  they occupy the bottom quarter of the scale. Serendipity@10 tells the same
+  story from the accuracy side — the share of each model's Precision@10 that
+  survives a popularity discount runs from 0.678 (Most-Popular) through 0.702
+  (AutoRec) to 0.851 (content).
+- **Coverage and accuracy point at different winners.** Across six measures —
+  lowest RMSE, highest NDCG@10, highest Novelty@10, highest Serendipity@10,
+  widest coverage, most cold-start reach — **three different models** hold the
+  six titles. AutoRec has the lowest rating error (0.8517) while recommending
+  from 0.6% of the catalogue; the Nested Hybrid ranks best (0.1643) and is the
+  most serendipitous (0.0900); the content model is the most diverse (24.9%),
+  the most novel (6.76), reaches the most cold items (481) and is the worst
+  ranker (0.0359). Reporting a single "best model" would hide all of it.
 - **Selection noise is visible at this scale.** The nested-hybrid grid's
   unconstrained winner was a degenerate corner (alpha1=0, alpha2=1, i.e.
   AutoRec alone) that beat the best genuine three-model blend by 0.0006
@@ -245,8 +279,23 @@ results are read at the strength they actually support.
 ### Next steps
 
 1. An online or interleaved evaluation, to test whether the coverage the
-   content model buys is worth the offline ranking it costs.
-2. A cold-user path in the serving layer, with Most-Popular as the
-   documented fallback.
+   content model buys is worth the offline ranking it costs. Novelty and
+   serendipity are offline proxies for it, not a substitute: they measure
+   how far into the tail a list reaches, not whether anyone watched.
+2. **Personalized** cold-start, not just the baseline fallback now in place.
+   A near-line service could build a temporary TF-IDF profile from a new
+   user's first few interactions and push it through the existing hybrid
+   with the collaborative weight pinned to zero — reusing the components
+   already built and measured here, rather than adding a model.
 3. Repeated splits (or cross-validation) for hyperparameter selection, so
    the noise floor is estimated rather than assumed.
+4. Feeding content features into the deep model itself rather than blending
+   them afterwards — a two-tower design, or injecting the text cosine
+   similarities as extra inputs to AutoRec's hidden layer. The cold items
+   here are not featureless: all 732 have plot text, and AutoRec simply
+   cannot see it, which is why its predictions on them have zero variance.
+   The trade-off is real in both directions, though: late fusion is what
+   makes each component separately measurable, and it is what let this
+   project show that AutoRec collapses onto popularity while the content
+   model does not. An early-fusion model would rank better or worse as one
+   number, with no way to attribute the difference.

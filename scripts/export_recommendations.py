@@ -24,8 +24,19 @@ Run from the repo root, with the project's real venv active (needs torch):
     python scripts/export_recommendations.py
 """
 import json
+import sys
 import time
 from pathlib import Path
+
+# Running a file inside scripts/ puts scripts/ on sys.path, NOT the repo root,
+# so `import core...` below fails with ModuleNotFoundError even from the right
+# working directory. The notebook does not hit this because its first cell adds
+# the repo root itself. Adding it here means the documented command works as
+# documented — `python scripts/export_recommendations.py` from the repo root —
+# instead of only via `python -m scripts.export_recommendations`.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import pandas as pd
 
@@ -152,6 +163,38 @@ def main():
             ],
         }
 
+    # --- Cold-start fallback list, for users this export never scored ------
+    # api/main.py serves this to any userId not in `recommendations` instead of
+    # returning 404. It is the Most-Popular baseline from notebook Step 6b -
+    # deliberately the same one the seven-model comparison measures, so the
+    # fallback's quality is a number already in the report (test NDCG@10
+    # 0.1549) rather than an unquantified guess.
+    #
+    # Built from the TRAIN+VAL matrix, not the full ratings.csv: this is the
+    # same data every deployed model here was fit on, so the fallback cannot
+    # see anything the personalized models could not.
+    print("Building the Most-Popular cold-start fallback list...")
+    trainval_popularity = ds.trainval_matrix.notna().sum(axis=0)
+    # kind="mergesort" is STABLE, matching the notebook's Step 6 baseline:
+    # popularity counts are almost all ties, and an unstable sort would give a
+    # different "most popular" list on each run.
+    popular_ranked = trainval_popularity.sort_values(ascending=False, kind="mergesort")
+
+    cold_start_fallback = []
+    for rank, movie_id in enumerate(popular_ranked.index[:TOP_N], start=1):
+        meta = movie_lookup.loc[movie_id] if movie_id in movie_lookup.index else None
+        cold_start_fallback.append({
+            "rank": rank,
+            "movieId": int(movie_id),
+            "title": str(meta["title"]) if meta is not None else f"Movie {movie_id}",
+            "genres": str(meta["genres"]) if meta is not None else "",
+            # Not a model score - there is no model here. The number of
+            # train+val ratings is what ranked this list, so that is what the
+            # row reports, and the API labels the column accordingly.
+            "score": int(trainval_popularity[movie_id]),
+            "held_out_rating": None,
+        })
+
     out = {
         "model": "Nested Hybrid (a1=0.4, a2=0.6)",
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -160,9 +203,11 @@ def main():
         "profile_n_per_user": PROFILE_N,
         "recommendations": recommendations,
         "profiles": profiles,
+        "cold_start_fallback": cold_start_fallback,
+        "cold_start_model": "Most-Popular (non-personalized baseline)",
     }
 
-    out_path = Path(__file__).resolve().parents[1] / "data" / "recommendations_export.json"
+    out_path = REPO_ROOT / "data" / "recommendations_export.json"
     out_path.write_text(json.dumps(out, indent=1), encoding="utf-8")
     print(f"Wrote {out_path} ({out_path.stat().st_size / 1024:.0f} KB) in {time.time() - t0:.1f}s")
 

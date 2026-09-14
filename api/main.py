@@ -55,6 +55,12 @@ class RecommendationService:
         # from exports written before this field existed (older
         # recommendations_export.json on disk); .get() below handles that.
         self._profiles = data.get("profiles", {})
+        # Most-Popular top-N, served to users this export never scored. .get()
+        # with a default rather than data["..."]: an export written before this
+        # field existed must still load, and has_cold_start_fallback below tells
+        # the routes which behaviour they can offer.
+        self._cold_start_fallback = data.get("cold_start_fallback", [])
+        self._cold_start_model = data.get("cold_start_model", "Most-Popular (non-personalized baseline)")
 
     @property
     def model_name(self):
@@ -74,12 +80,39 @@ class RecommendationService:
         """Sorted int userIds this export has recommendations for."""
         return sorted(int(uid) for uid in self._recommendations)
 
+    @property
+    def cold_start_model(self):
+        return self._cold_start_model
+
+    @property
+    def has_cold_start_fallback(self):
+        """False for exports written before the fallback list existed."""
+        return bool(self._cold_start_fallback)
+
+    def knows_user(self, user_id: int) -> bool:
+        """Whether this user was scored by the batch job at all."""
+        return str(user_id) in self._recommendations
+
     def get_top_n(self, user_id: int, n: int = 10):
         """Top-n rows for one user, or None if this user isn't in the export."""
         rows = self._recommendations.get(str(user_id))
         if rows is None:
             return None
         return rows[:n]
+
+    def get_cold_start(self, n: int = 10):
+        """
+        Top-n of the non-personalized Most-Popular list — what a user the
+        batch job never scored gets served.
+
+        This is the standing cost of precomputing: lookups are a dict hit, but
+        only for users scored in advance. Returning 404 to everyone else made
+        that cost look like a crash. Serving the baseline instead keeps the
+        request path free of any model while still answering, and because the
+        fallback is the SAME Most-Popular baseline the notebook evaluates, its
+        quality is a measured number (test NDCG@10 0.1549) rather than a guess.
+        """
+        return self._cold_start_fallback[:n]
 
     def get_profile(self, user_id: int, n: int = 8):
         """
@@ -114,6 +147,7 @@ def health():
         "model": service.model_name,
         "generated_at": service.generated_at,
         "n_users": len(service.user_ids),
+        "cold_start_fallback": service.cold_start_model if service.has_cold_start_fallback else None,
     }
 
 
@@ -140,13 +174,36 @@ def recommend(user_id: int, n: int = 10):
             f"re-run scripts/export_recommendations.py with a higher TOP_N first.",
         )
     rows = service.get_top_n(user_id, n)
-    if rows is None:
+    if rows is not None:
+        return {
+            "userId": user_id,
+            "model": service.model_name,
+            "is_fallback": False,
+            "recommendations": rows,
+        }
+
+    # Unknown user: serve the cold-start baseline rather than an error. 200 with
+    # is_fallback=True, not 404 and not a silent substitution — a caller that
+    # ignores the flag still gets a usable list, and one that reads it can tell
+    # the two apart. Personalization returns for this user on the next batch run.
+    if not service.has_cold_start_fallback:
         raise HTTPException(
             404,
-            f"No recommendations for userId={user_id} — this export only covers "
-            f"the {len(service.user_ids)} users in ml-latest-small.",
+            f"No recommendations for userId={user_id}, and this export predates "
+            f"the cold-start fallback — re-run scripts/export_recommendations.py.",
         )
-    return {"userId": user_id, "model": service.model_name, "recommendations": rows}
+    return {
+        "userId": user_id,
+        "model": service.cold_start_model,
+        "is_fallback": True,
+        "fallback_reason": (
+            f"userId={user_id} was not scored by the last batch run "
+            f"(generated {service.generated_at}, covering "
+            f"{len(service.user_ids)} users). Serving the non-personalized "
+            f"Most-Popular baseline until the next run scores this user."
+        ),
+        "recommendations": service.get_cold_start(n),
+    }
 
 
 @app.get("/profile/{user_id}")
@@ -164,8 +221,11 @@ def profile(user_id: int, n: int = 8):
     if result is None:
         raise HTTPException(
             404,
-            f"No profile for userId={user_id} — this export only covers "
-            f"the {len(service.user_ids)} users in ml-latest-small.",
+            f"No rating history for userId={user_id} — this export only covers "
+            f"the {len(service.user_ids)} users in ml-latest-small. (/recommend "
+            f"still answers for unknown users, with the cold-start fallback; a "
+            f"profile cannot be faked the same way — a new user genuinely has "
+            f"no ratings yet.)",
         )
     return {"userId": user_id, **result}
 
