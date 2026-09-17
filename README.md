@@ -177,6 +177,11 @@ included. It is resumable and skips overviews already present.
 - **TMDB plot overviews** — `data/overview_plot.csv`, 10,884 rows covering
   9,603 of the 9,724 rated movies (98.8%). Fetched with
   `scripts/fetch_overviews.py`.
+- **TMDB plot overviews, pre-expansion** — `data/overview_plot_before_expansion.csv`,
+  the original fetch, covering 3,536 of the 9,724 rated movies (36.4%).
+  Kept as a tracked input because Appendix A of the report measures the
+  corpus expansion against it. It cannot be regenerated: re-running the
+  fetcher returns today's TMDB data, not the September snapshot.
 
 > This product uses the TMDB API but is not endorsed or certified by TMDB.
 
