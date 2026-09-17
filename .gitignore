@@ -20,3 +20,10 @@ report/*.aux
 report/*.log
 report/*.out
 report/*.synctex.gz
+
+# fetch_overviews.py by-products — all regenerable or redundant.
+# overview_plot_full.csv is what the fetcher writes before --install copies
+# it over overview_plot.csv; the two end up byte-identical.
+data/overview_plot_full.csv
+data/.overview_fetch_checkpoint.csv
+*.bak
