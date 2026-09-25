@@ -15,11 +15,11 @@ measures. The headline result is that no single model wins everything:
 |---|---|---|---|---|---|
 | User-mean baseline | — | 0.9448 | — | — | — |
 | Most-Popular (no personalization) | 0.1549 | — | 0.6% | 1.65 | 0 |
-| SVD (collaborative filtering) | 0.1502 | 0.8734 | 4.0% | 2.34 | 0 |
+| SVD (collaborative filtering) | 0.1502 | 0.8734 | 3.9% | 2.34 | 0 |
 | Content-based (TF-IDF) | 0.0359 | — | **24.9%** | **6.76** | **481** |
 | AutoRec (I-AutoRec) | 0.1432 | **0.8517** | 0.6% | 1.86 | 0 |
 | Hybrid (SVD + Content, α=0.5) | 0.1605 | — | 5.5% | 2.49 | 6 |
-| Hybrid (switching) | 0.1474 | — | 4.2% | 2.40 | 60 |
+| Hybrid (switching) | 0.1474 | — | 4.2% | 2.39 | 60 |
 | **Nested Hybrid (SVD + AutoRec + Content)** | **0.1643** | — | 5.1% | 2.42 | 1 |
 
 Cold-start reach counts items with zero train+val ratings appearing in a
