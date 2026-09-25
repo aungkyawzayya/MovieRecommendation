@@ -1,5 +1,6 @@
 # Python virtual environment — huge, machine-specific, never commit
 venv/
+venv312/
 
 # Python cache files
 __pycache__/
