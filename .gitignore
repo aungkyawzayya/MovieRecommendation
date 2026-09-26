@@ -31,3 +31,4 @@ data/.overview_fetch_checkpoint.csv
 
 # LaTeX report sources — the report is a separate deliverable, not part of the code ZIP
 report/
+docs/Draft.docx
