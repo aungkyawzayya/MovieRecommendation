@@ -28,3 +28,6 @@ report/*.synctex.gz
 data/overview_plot_full.csv
 data/.overview_fetch_checkpoint.csv
 *.bak
+
+# LaTeX report sources — the report is a separate deliverable, not part of the code ZIP
+report/
