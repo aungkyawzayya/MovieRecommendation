@@ -15,11 +15,11 @@ measures. The headline result is that no single model wins everything:
 |---|---|---|---|---|---|
 | User-mean baseline | — | 0.9448 | — | — | — |
 | Most-Popular (no personalization) | 0.1549 | — | 0.6% | 1.65 | 0 |
-| SVD (collaborative filtering) | 0.1502 | 0.8734 | 3.9% | 2.34 | 0 |
+| SVD (collaborative filtering) | 0.1502 | 0.8734 | 4.0% | 2.34 | 0 |
 | Content-based (TF-IDF) | 0.0359 | — | **24.9%** | **6.76** | **481** |
 | AutoRec (I-AutoRec) | 0.1432 | **0.8517** | 0.6% | 1.86 | 0 |
 | Hybrid (SVD + Content, α=0.5) | 0.1605 | — | 5.5% | 2.49 | 6 |
-| Hybrid (switching) | 0.1474 | — | 4.2% | 2.39 | 60 |
+| Hybrid (switching) | 0.1474 | — | 4.2% | 2.40 | 60 |
 | **Nested Hybrid (SVD + AutoRec + Content)** | **0.1643** | — | 5.1% | 2.42 | 1 |
 
 Cold-start reach counts items with zero train+val ratings appearing in a
@@ -38,7 +38,7 @@ Two findings worth stating up front, because they shaped the project:
   (`scripts/seed_stability.py`), so the honest claim is that collaborative
   filtering alone cannot be separated from recommending best-sellers — not
   that it is strictly worse. The weighted hybrids, by contrast, beat plain
-  SVD on every split (+0.0103 ± 0.0019).
+  SVD on every split (+0.0103 ± 0.0022).
 - **AutoRec achieves near-CF ranking quality by collapsing onto
   popularity** — its catalogue coverage (0.6%) is identical to the naive
   baseline's, and Step 13's novelty measure sharpens that from "as narrow as"
@@ -162,6 +162,7 @@ was never fit on.
 | `export_recommendations.py` | Batch-score the deployed model to JSON (step 2 above) |
 | `fetch_overviews.py` | Fetch TMDB plot overviews. Needs `TMDB_API_KEY` in the environment. Raised text coverage from 36.4% to 98.8% of the rated catalogue |
 | `seed_stability.py` | Re-run the seven-model comparison across four splits and report which claims survive all of them (~80s) |
+| `qualitative_snapshot.py` | Print each model's top-5 for four sample users with the rating count of every recommended film — the source of Table 10 in the report (~40s) |
 
 `fetch_overviews.py` only needs re-running to rebuild
 `data/overview_plot.csv` from scratch; the file it produces is already
@@ -293,12 +294,12 @@ results are read at the strength they actually support.
 
   | Ordering | mean diff | std | Verdict |
   |---|---|---|---|
-  | Nested Hybrid > Hybrid (weighted) | 0.0035 | 0.0007 | holds on 4/4 |
-  | Hybrid (weighted) > SVD | 0.0103 | 0.0019 | holds on 4/4 |
-  | Nested Hybrid > Most-Popular | 0.0150 | 0.0066 | holds on 4/4 |
-  | Most-Popular > AutoRec | 0.0073 | 0.0043 | holds on 4/4 |
-  | SVD > Hybrid (switching) | 0.0025 | 0.0005 | holds on 4/4 |
-  | SVD vs Most-Popular | 0.0012 | 0.0052 | **sign flips — not separable** |
+  | Nested Hybrid > Hybrid (weighted) | 0.0035 | 0.0008 | holds on 4/4 |
+  | Hybrid (weighted) > SVD | 0.0103 | 0.0022 | holds on 4/4 |
+  | Nested Hybrid > Most-Popular | 0.0150 | 0.0076 | holds on 4/4 |
+  | Most-Popular > AutoRec | 0.0073 | 0.0050 | holds on 4/4 |
+  | SVD > Hybrid (switching) | 0.0025 | 0.0006 | holds on 4/4 |
+  | SVD vs Most-Popular | 0.0012 | 0.0060 | **sign flips — not separable** |
 
   Two things follow. The switching hybrid *consistently* ranks below plain
   SVD while reaching 60 cold-start slots to SVD's 0 — the accuracy/coverage
